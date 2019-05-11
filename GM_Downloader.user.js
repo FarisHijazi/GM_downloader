@@ -137,11 +137,11 @@ unsafeWindow.downloadedSet = downloadedSet;
 /**
  * @param url
  * @param {Object} opts - {
-      method: String,
-      url: String,
-      params: String | Object,
-      headers: Object
-    }
+ *   method: String,
+ *   url: String,
+ *   params: String | Object,
+ *   headers: Object
+ * }
  * @returns {Promise<any>}
  * @constructor
  */
@@ -212,8 +212,7 @@ if (!unsafeWindow.zips) {
 
 /** mimeTypeJSON contains the mimeType to file extension database, useful for getting the extension from the mimetype */
 
-var mimeTypes;
-if (typeof unsafeWindow.mimeTypes !== 'object') {
+if (!(typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0)) {
     fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
         method: 'GET', // *GET, POST, PUT, DELETE, etc.
         mode: 'cors', // no-cors, cors, *same-origin
@@ -227,16 +226,15 @@ if (typeof unsafeWindow.mimeTypes !== 'object') {
         referrer: 'no-referrer', // no-referrer, *client
         body: null, // body data type must match "Content-Type" header
     }).then(res => res.json()).then(json => {
-        if (typeof unsafeWindow.mimeTypes === 'object') {
-            debug && console.debug('unsafeWindow already contains mimeTypes, no need to load another one');
+        if (typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0) {
+            debug && console.debug('unsafeWindow already contains unsafeWindow.mimeTypes, no need to load another one');
             return;
         }
-        mimeTypes = json;
-        unsafeWindow.mimeTypes = mimeTypes;
-        console.log('mimeTypes:', json);
+        unsafeWindow.mimeTypes = json;
+        console.log('unsafeWindow.mimeTypes:', json);
     }).catch(res => {
         console.error('loading json failed', res);
-        mimeTypes = {};
+        unsafeWindow.mimeTypes = {};
     });
 }
 
@@ -885,8 +883,8 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                 const [fullMatch, mimeType1, mimeType2] = res.responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
                 const contentType = [mimeType1, mimeType2].join('/');
                 const blob = new Blob([res.response], {type: contentType});
-                const fileExtension = mimeTypes.hasOwnProperty(contentType) && mimeTypes[contentType] ?
-                    mimeTypes[contentType].extensions[0] :
+                const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
+                    unsafeWindow.mimeTypes[contentType].extensions[0] :
                     mimeType2;
 
                 console.debug('contentType:', contentType);
