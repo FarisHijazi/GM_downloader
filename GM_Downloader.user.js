@@ -646,6 +646,7 @@ function retry(fileUrl, finalName, count) {
     }
 }
 
+
 /**
  * @deprecated
  * @param inputUrls
@@ -653,6 +654,10 @@ function retry(fileUrl, finalName, count) {
  * @param maxDlLimit
  */
 function downloadBatch(inputUrls, directory, maxDlLimit) { // download batch but with a max count limit
+    let message = 'downloadBatch() is deprecated, plz use download() or zipFiles() instead';
+    console.error(message);
+    alert(message);
+
     console.log('maxDownloadCount was passed (but all inputUrls will be downloaded anyways):', maxDlLimit);
     directory = directory || document.title;
 
@@ -673,6 +678,10 @@ function downloadBatch(inputUrls, directory, maxDlLimit) { // download batch but
 
 /**@deprecated*/
 function downloadImageBatch(inputUrls, directory) {
+    let message = 'downloadImageBatch() is deprecated, plz use download() or zipFiles() instead';
+    console.error(message);
+    alert(message);
+
     if (!inputUrls) throw 'mainImage input URLs null!';
 
     console.log('Image batch received:', inputUrls);
@@ -693,8 +702,9 @@ function nameFile(fileUrl) {
 
     let fileName = 'untitled';
     try {
-        fileName = clearUrlGibberish(tryDecodeURIComponent(fileUrl).split('/').pop())
-            .split('.')[0];
+        fileName = clearUrlGibberish(fileUrl).split('/').pop()
+            .split('.')
+            .sort((a, b) => b.length - a.length)[0]; // get the long part (ignore short parts like ".com")
     } catch (e) {
         console.error('Failed to name file', fileUrl, e);
     }
