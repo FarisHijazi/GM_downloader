@@ -413,6 +413,17 @@ function extractFullUrlForSpecialHostnames(fileUrl) {
     return fileUrl;
 }
 
+function bindPromiseSetters(promise, dets) {
+    for (const key of Object.keys(dets)) {
+        if (typeof dets[key] === 'function' && key.charAt(0) !== '_') {
+            promise[key] = function (callback) {
+                console.log('promise.' + key + '()');
+                dets['_' + key] = callback;
+                return promise;
+        }
+    }
+}
+}
 
 /**
  * @param {string|Element} fileUrl the url to the file to download
@@ -620,6 +631,165 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
         },
     });
 }
+
+/**
+ * basic promise that will be built up on later, pure GM_download promise
+ * @param url
+ * @param opts
+ * @returns {Promise}
+ * @constructor
+ */
+function GM_downloadPromise(url, opts = {}) {
+    var promise;
+    var xhr = {};
+    var details = $.extend({
+        url: url,
+        headers: undefined,
+        saveAs: false,
+        timeout: undefined,
+    }, opts);
+
+    // FIXME: the executor is running too early as I had feared, try to make every setter function check if onload
+    promise = new Promise(function (resolve, reject) {
+        console.debug('promise.execute()');
+        details = $.extend(details, {
+            url: url,
+            name: opts.name || 'untitled.gif',
+            // actual callbacks (passed by user)
+            _onload: () => undefined,
+            _onerror: () => undefined,
+            _onprogress: () => undefined,
+            _ontimeout: () => undefined,
+
+            // the functions that the user passes
+            onload: function (e) {
+                details._onload(e);
+                resolve(e);
+            },
+            onerror: function (r) {
+                details._onerror(r);
+                reject(r);
+            },
+            onprogress: function (p) {
+                details._onprogress(p);
+            },
+            ontimeout: function (r) {
+                details._ontimeout(r);
+                reject(r);
+            },
+        });
+
+        setTimeout(function () {
+            console.debug('GM_download()');
+            xhr = GM_download(details);
+        }, 0);
+    });
+
+    promise.abort = () => (xhr && xhr.abort && xhr.abort());
+
+    // those are the setters (the ones used in the chain)
+    bindPromiseSetters(promise, details);
+
+    return promise;
+}
+
+function GM_xmlhttpRequestPromise(url, opts = {}) {
+    var promise;
+    var details = $.extend({
+        url: url,
+        method: 'GET',
+        headers: undefined,
+        data: undefined,
+        binary: undefined,
+        timeout: undefined,
+        context: undefined,
+        responseType: 'arraybuffer',
+        overrideMimeType: undefined,
+        anonymous: undefined,
+        fetch: false,
+        username: undefined,
+        password: undefined,
+    }, opts);
+    var xhr = {};
+
+
+    promise = new Promise(function (resolve, reject) {
+        console.debug('promise.execute()');
+        details = $.extend(details, {
+            url: url,
+            // method: 'GET',
+            // headers: null,
+            // data: null,
+            // binary: null,
+            // timeout: null,
+            // context: {},
+            // responseType: 'arraybuffer',
+            // overrideMimeType: null,
+            // anonymous: null,
+            // fetch: false,
+            // username: null,
+            // password: null,
+
+
+            // actual callbacks (passed by user)
+            _onload: () => undefined,
+            _onerror: () => undefined,
+            _onprogress: () => undefined,
+            _ontimeout: () => undefined,
+            _onabort: () => undefined,
+            _onloadstart: () => undefined,
+            _onreadystatechange: () => undefined,
+
+
+            // the functions that the user passes
+            onload: function (e) {
+                details._onload(e);
+                resolve(e);
+            },
+            onerror: function (r) {
+                details._onerror(r);
+                reject(r);
+            },
+            onprogress: function (p) {
+                details._onprogress(p);
+            },
+            ontimeout: function (r) {
+                details._ontimeout(r);
+                reject(r);
+            },
+            onabort: function (e) {
+                details._onabort(e);
+                reject(e);
+            },
+            onloadstart: function (e) {
+                details._onloadstart(e);
+            },
+            onreadystatechange: e => {
+                details._onreadystatechange(e);
+            },
+        });
+
+        setTimeout(function () {
+            console.debug('GM_xmlhttpRequest()');
+            xhr = GM_xmlhttpRequest(details);
+        }, 0);
+    });
+
+    promise.abort = () => (xhr && xhr.abort && xhr.abort());
+
+
+    // those are the setters (the ones used in the chain)
+    bindPromiseSetters(promise, details);
+
+    console.log(
+        'GM_xmlhttpRequestPromise:' +
+        '\npromise:', promise,
+        '\ndetails:', details
+    );
+    return promise;
+}
+unsafeWindow.GM_xmlhttpRequestPromise = GM_xmlhttpRequestPromise;
+
 
 function retry(fileUrl, finalName, count) {
     console.log('RETRYING:', fileUrl);
