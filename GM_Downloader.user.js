@@ -48,7 +48,7 @@
  * @param details.Returns an object with the following property:
  * @param details.abort - function to be called to cancel this download
  */
-var GM_download;
+// GM_download;
 
 /**
  * Response callback
@@ -99,10 +99,8 @@ var GM_download;
  *
  * @return {{abort: Function}}
  */
-var GM_xmlhttpRequest;
 
 
-var unsafeWindow;
 if (typeof unsafeWindow === 'undefined') unsafeWindow = window;
 
 
@@ -142,10 +140,10 @@ unsafeWindow.downloadedSet = downloadedSet;
  *   params: String | Object,
  *   headers: Object
  * }
- * @returns {Promise<any>}
+ * @returns {Promise}
  * @constructor
  */
-function GM_fetch(url, opts = {}) {
+function GM_fetch_(url, opts = {}) {
     var xhr;
 
     // // this alows for calling it like this: fetch({ url:..., onload=...})
@@ -181,37 +179,31 @@ function GM_fetch(url, opts = {}) {
     return promise;
 }
 
-GM_xmlhttpRequest.prototype.fetch = GM_fetch;
-GM_xmlhttpRequest.fetch = GM_fetch;
+GM_xmlhttpRequest.prototype.fetch = GM_fetch_;
+GM_xmlhttpRequest.fetch = GM_fetch_;
 unsafeWindow.GM_xmlhttpRequest = GM_xmlhttpRequest;
-unsafeWindow.GM_fetch = GM_fetch;
-
-/**abbreviation for querySelectorAll()*/
-function qa(selector) {
-    return document.querySelectorAll(selector);
-}
-/**abbreviation for querySelector()*/
-function q(selector) {
-    return document.querySelector(selector);
-}
+unsafeWindow.GM_fetch_ = GM_fetch_;
+unsafeWindow.GM_downloadPromise = GM_downloadPromise;
 
 /** returns full path, not just partial path */
 var normalizeUrl = (function () {
     var fakeLink = document.createElement('a');
-
     return function (url) {
         fakeLink.href = url;
         return fakeLink.href;
     }
 })();
-
+/**
+ * zips that have been initiated but have not yet been generated
+ * @type {Set<any>}
+ */
+var pendingZips = new Set();
 // just globally keeping track of all the zips
 if (!unsafeWindow.zips) {
     unsafeWindow.zips = [];
 }
 
 /** mimeTypeJSON contains the mimeType to file extension database, useful for getting the extension from the mimetype */
-
 if (!(typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0)) {
     fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
         method: 'GET', // *GET, POST, PUT, DELETE, etc.
@@ -247,33 +239,6 @@ if (Config.saveDownloadHistory) {
 }
 unsafeWindow.storeDownloadHistory = storeDownloadHistory;
 
-function storeDownloadHistory() {
-    if (downloadedSet.size <= 0) return;
-    const storedDlH = GM_getValue('downloadHistory', []),
-        mergedDlH = Array.from(downloadedSet).concat(storedDlH);
-    console.debug(
-        'storedDlH:', storedDlH,
-        'downloadedSet: ', downloadedSet,
-        '\nmergedDownloadHistory:', mergedDlH
-    );
-    return GM_setValue('downloadHistory', Array.from(new Set(mergedDlH)));
-}
-
-/**
- url - the URL from where the data should be downloaded
- name - the filename - for security reasons the file extension needs to be whitelisted at the Tampermonkey options page
- headers - see GM_xmlhttpRequest for more details
- saveAs - boolean value, show a saveAs dialog
- onerror callback to be executed if the download ended up with an error
- onload callback to be executed if the download finished
- onprogress callback to be executed if the download made some progress
- ontimeout callback to be executed if the download failed due to a timeout
- */
-function setNameFilesByNumber(newValue) {
-    Config.NAME_FILES_BY_NUMBER = newValue;
-    GM_getValue('NAME_FILES_BY_NUMBER', Config.NAME_FILES_BY_NUMBER);
-}
-
 (function exposingMembers() {
     unsafeWindow.MAIN_DIRECTORY = Config.MAIN_DIRECTORY;
     unsafeWindow.setNameFilesByNumber = setNameFilesByNumber;
@@ -305,6 +270,7 @@ function setNameFilesByNumber(newValue) {
         JSZip.prototype.zipTotal = 0;
         JSZip.prototype.totalSize = 0;
         JSZip.prototype.totalLoaded = 0;
+
         JSZip.prototype.generateIndexHtml = function generateIndexHtml() {
             let html = '';
             for (const key of Object.keys(this.files)) {
@@ -378,6 +344,7 @@ function setNameFilesByNumber(newValue) {
         JSZip.prototype.totalLoaded = 0;
         JSZip.prototype.responseBlobs = new Set();
         JSZip.prototype.zipName = document.title;
+        /** @type {ProgressBar} */
         JSZip.prototype.__defineGetter__('progressBar', function () {
             if (!this._progressBar)
                 this._progressBar = setupProgressBar();
@@ -389,10 +356,37 @@ function setNameFilesByNumber(newValue) {
     }
 })();
 
+function storeDownloadHistory() {
+    if (downloadedSet.size <= 0) return;
+    const storedDlH = GM_getValue('downloadHistory', []),
+        mergedDlH = Array.from(downloadedSet).concat(storedDlH);
+    console.debug(
+        'storedDlH:', storedDlH,
+        'downloadedSet: ', downloadedSet,
+        '\nmergedDownloadHistory:', mergedDlH
+    );
+    return GM_setValue('downloadHistory', Array.from(new Set(mergedDlH)));
+}
+
+/**
+ url - the URL from where the data should be downloaded
+ name - the filename - for security reasons the file extension needs to be whitelisted at the Tampermonkey options page
+ headers - see GM_xmlhttpRequest for more details
+ saveAs - boolean value, show a saveAs dialog
+ onerror callback to be executed if the download ended up with an error
+ onload callback to be executed if the download finished
+ onprogress callback to be executed if the download made some progress
+ ontimeout callback to be executed if the download failed due to a timeout
+ */
+function setNameFilesByNumber(newValue) {
+    Config.NAME_FILES_BY_NUMBER = newValue;
+    GM_getValue('NAME_FILES_BY_NUMBER', Config.NAME_FILES_BY_NUMBER);
+}
+
 
 /** if there's a **special** as gify.com, the big url can be extracted */
 function extractFullUrlForSpecialHostnames(fileUrl) {
-    if (getHostname(fileUrl).indexOf('gfycat.com') === 0) {
+    if (new URL(fileUrl).hostname.indexOf('gfycat.com') === 0) {
         fileUrl = fileUrl.replace(/gfycat\.com/i, 'giant.gfycat.com') + '.webm';
     }
     return fileUrl;
@@ -600,7 +594,7 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
             console.debug('Progress:', p);
         },
         saveAs: false,
-        // headers: {},
+        headers: null,
         ontimeout: function () {
         },
     });
@@ -694,6 +688,7 @@ function tryDecodeURIComponent(str) {
     try {
         return decodeURIComponent(str);
     } catch (e) {
+        debug && console.warn('tryDecodeURIComponent(' + str + '), failed');
         return str;
     }
 }
@@ -708,7 +703,8 @@ function nameFile(fileUrl) {
     } catch (e) {
         console.error('Failed to name file', fileUrl, e);
     }
-    fileName = cleanFileName(new RegExp(`[${invalidNameCharacters}]`).test(fileName) ? (`${document.title} - `) : fileName);
+    fileName = cleanFileName(fileName);
+    fileName = new RegExp(`[${invalidNameCharacters}]`).test(fileName) ? (`${document.title} - untitled`) : fileName;
     return fileName;
 }
 function getFileExtension(fileUrl) {
@@ -770,6 +766,13 @@ function zipBeforeUnload(e) {
     return dialogText;
 }
 
+//FIXME: this is basically zipFiles with custom error handlers, just extend zipFiles to allow for fallback urls
+/**
+ * @deprecated
+ * @param imgList
+ * @param zipName
+ * @returns {JSZip}
+ */
 function zipImages(imgList, zipName) {
     return zipFiles(imgList, zipName, function onBadResponse(res, fileUrl) {
         console.debug(
@@ -808,7 +811,6 @@ function zipImages(imgList, zipName) {
  *   file.fileURL = file.fileURL || file.fileUrl || file.url || file.src || file.href;
  *   file.fileName = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
  * @param zipName
- * @param onBadResponse
  * @return {JSZip}
  */
 function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
@@ -978,7 +980,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                         progressBar.setText(progressText);
                     } else {
                         var progressbarContainer;
-                        if ((progressbarContainer = q('#progressbar-cotnainer'))) {
+                        if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
                             progressbarContainer.innerText = progressText;
                         }
                     }
@@ -996,19 +998,20 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
     );
     unsafeWindow.zips.push(zip);
 
+    //TODO: this should return a promise of when all the files have been zipped,
+    //          this can be done using Promise.all(zip.xhrList)
     return zip;
 }
 
-
 function setupProgressBar() {
     const pbHeader = createElement(`<header id="progressbar-container"/>`);
-    if (!q('#progressbar-container')) {
+    if (!document.querySelector('#progressbar-container')) {
         document.body.firstElementChild.before(pbHeader);
     }
 
     // noinspection JSUnresolvedVariable
     if (typeof (ProgressBar) == 'undefined') {
-        console.warn('ProgressBar is not defined.');
+        console.error('ProgressBar.js is not defined.');
         return;
     }
 
@@ -1034,7 +1037,7 @@ function setupProgressBar() {
     pbHeader.style['z-index'] = '100';
 
     progressBar.set(0);
-    const progressbarText = q('.progressbar-text');
+    const progressbarText = document.querySelector('.progressbar-text');
     progressbarText.style.display = 'inline';
     progressbarText.style.position = 'relative';
     return progressBar;
@@ -1102,11 +1105,11 @@ function imageUrl2blob(url, callback, callbackParams) {
         onerror: /** @param {XMLHttpRequest} res */ function (res) {
             console.error(
                 'An error occurred.' +
-                '\nresponseText: ', res.responseText ,
-                '\nreadyState: ', res.readyState ,
-                '\nresponseHeaders: ', res.responseHeaders ,
-                '\nstatus: ', res.status ,
-                '\nstatusText: ', res.statusText ,
+                '\nresponseText: ', res.responseText,
+                '\nreadyState: ', res.readyState,
+                '\nresponseHeaders: ', res.responseHeaders,
+                '\nstatus: ', res.status,
+                '\nstatusText: ', res.statusText,
                 '\nfinalUrl: ', res.finalUrl
             );
         },
