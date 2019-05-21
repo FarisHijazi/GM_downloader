@@ -422,90 +422,301 @@ function bindPromiseSetters(promise, dets) {
                 return promise;
         }
     }
+    }
 }
+
+function detectXml(text) {
+    const blacklistedPhrases = ['Bad request', '<html', '<!DOCTYPE html PUBLIC'];
+    const re = new RegExp('(' + blacklistedPhrases.join(')|(') + ')', 'i');
+    return re.test(text || '');
+}
+
+/**
+ * Same as download but without cleaning the filename or anything
+ * @param o
+ * @returns {Object}
+ */
+//FIXME: big mess, sort out what variables are needed and what aren't, and what o should contain
+function download_raw(o) {
+    // to the actual downloading part
+    // FIXME: to we even need fileUrl and finalName? are they gonna change? aren't they the same as details.name and details.url?
+    /**
+     * @type Object
+     * @property {Function} abort
+     */
+    var promise = {};
+
+    /**
+     * keep in mind that the details object is specific to a single download_raw() function call, do NOT pass details to another download_raw(details) function
+     * details is to be passed to the GM_download and xmlhttpRequest() only.
+     * changing names and urls is to be done with the options objectc o
+     * @type {{headers: {}, onerrorFinal: onerrorFinal, onerror: onerror, saveAs: boolean, onloadFinal: onloadFinal, name: (*|string), onprogress: onprogress, url: *, ontimeout: ontimeout, onload: onload}}
+     */
+    var details = { // defaults
+        name: o.name,
+        url: o.url,
+        onerror: function (r) {
+            // remove the url from the list to give it another chance.
+            downloadedSet.delete(o.url);
+            console.warn(
+                'onerror(): Download failed:',
+                '\nUrl', o.url,
+                '\nError:', r,
+                '\nDetails obj:', details
+            );
+            // return; // FIXME: this entire thing is messed up, fix the retry system
+
+
+            /**
+             error - error reason
+             not_enabled,
+             not_whitelisted,
+             not_permitted,
+             not_supported,
+             not_succeeded, - the download wasn't started or failed, the details attribute may provide more information
+             */
+            var error = r.error;
+
+            if (o.attempts > 0) { // retry
+                console.log('retry:', details);
+                o.attempts--;
+
+                switch (error) {
+                    case 'not_succeeded':
+                        switch (r.details.current.toLowerCase()) {
+                            case 'server_failed': // fall-through
+                            case 'network_failed':
+                                // retry as if that didn't even happen
+                                o.attempts = Config.defaultDownloadAttempts;
+                                download_raw(o);
+                                break;
+                            case 'not_whitelisted':
+                                download(
+                                    {
+                                        url: o.url.replace(/\?.+/, ''),
+                                        name: o.name.replace(/\?.+/, '') + '.oops.jpg'
+                                    },
+                                    null,
+                                    null,
+                                    {attempts: Config.defaultDownloadAttempts}// FIXME: idk what this is supposed to be, but it's wrong
+                                );
+                                break;
+                            case 'user_canceled':
+                                console.log('Download canceled by user.');
+                                break;
+                        }
+                        break;
+                    case 'not_enabled':
+                    case 'not_permitted':
+                    case 'not_supported':
+                        break;
+                    case 'not_whitelisted': // fall-through
+                    default:
+                        // last retry
+                        GM_download(details);
+                }
+            } else {
+                o.name = `${o.name}.${getFileExtension(o.url)}`;
+                o.onerror && o.onerror(r);
+            }
+
+        },
+        onload: function onload(res) {
+            // res may be undefined because GM_download does NOT pass the response
+            if (!res) { //
+                console.warn('onload(res), why is the response undefined?!');
+            }
+
+            var blob = new Blob([res.response], {type: 'application/octet-stream'});
+            var objectUrl = URL.createObjectURL(blob); // blob url
+
+            debug && console.log(
+                'onload(res)',
+                '\nres:', res,
+                '\nblob:', blob,
+                '\nobjectUrl:', objectUrl
+            );
+
+            // FIXME: Uncaught TypeError: Cannot read property 'responseText' of undefined
+            if (detectXml(res.responseText)) {
+                console.error('Response was in XML:', o.url, res.responseText);
+
+                details.onerror && details.onerror(res);
+                // cancel this download attempt
+                promise && promise.abort && promise.abort();
+                return;
+            }
+
+            // TODO: use the mime types in the response to get the file extension
+
+            /**
+             * @param options
+             * @param options.url - the URL from where the data should be downloaded
+             * @param options.name - the filename - for security reasons the file extension needs to be whitelisted at Tampermonkey's options page
+             * @param options.headers - see GM_xmlhttpRequest for more details
+             * @param options.saveAs - boolean value, show a saveAs dialog
+             * @param options.onerror - callback to be executed if this download ended up with an error
+             * @param options.onload - callback to be executed if this download finished
+             * @param options.onprogress - callback to be executed if this download made some progress
+             * @param options.ontimeout - callback to be executed if this download failed due to a timeout
+             */
+            var download_details = {
+                url: details.url,
+                name: details.name,
+                headers: details.headers,
+                saveAs: details.saveAs,
+                onerror: details.onerror,
+                onload: () => o.onload && o.onload(res) || o.ondownload && o.ondownload(res),
+                onprogress: details.onprogress,
+                ontimeout: details.ontimeout,
+            };
+            GM_download(download_details); // use GM_download for the last download bit, this way we can use paths too
+
+            // reduce memory usage
+            if (details.blobTimeout !== undefined && details.blobTimeout !== -1) {
+                setTimeout(function () {
+                    URL.revokeObjectURL(objectUrl);
+                    if ('close' in blob) blob.close(); // File Blob.close() API, not supported by all the browser right now
+                    blob = undefined;
+                }, details.blobTimeout);
+            }
+
+            downloadedSet.add(o.url);
+
+            console.log('Download finished', o.name, '\n' + o.url);
+            details.onloadFinal && details.onloadFinal(res);
+        },
+        onprogress: function (p) {
+            console.debug('Progress:', p);
+        },
+        saveAs: false,
+        headers: null,
+        ontimeout: function () {
+        },
+        onloadFinal: function (res) {
+        },
+        onerrorFinal: function (rr) { //  default is to try
+            GM_download({
+                name: name + '.' + getFileExtension(o.url),
+                url: o.url,
+                onload: details.onload(rr),
+                onerror: function (rrr) {
+                    console.warn('Download failed:', o.url, rrr);
+                }
+            });
+            downloadedSet.delete(o.url); // upon failure, remove the url from the list to give it another chance.
+            console.error('Download failed, onerrorFinal():', name, o.url, rr);
+        },
+    };
+
+    // extending the options object (but not taking onerror or onload)
+    for (const k of Object.keys(o)) {
+        switch (k) {
+            case 'onafterload':
+            case 'onload':
+                details.onloadFinal = o.onload;
+                break;
+            case 'onerror':
+                details.onerrorFinal = o.onerror;
+                break;
+            default:
+                details[k] = o[k] || details[k];
+                break;
+        }
+    }
+
+    promise = GM_xmlhttpRequest(details);
+    return promise;
 }
 
 /**
  * @param {string|Element} fileUrl the url to the file to download
  * @param {string} fileName - gets extracted by default
- * @param {string=} directory
  *
- * @param {Object=} options
- * @param {string=} options.directory
- * @param {Function=} options.onload
- * @param {Function=} options.onerror
- * @param {string[]=[]} options.fallbackUrls - list of urls
- * @param {Element=} options.element - an HTML element
- * @param {string=} options.mainDirectory
- * @param {string=} options.fileExtension
- * @param {number=-1} options.blobTimeout - set this value to save memory, delete a download blob object after it times out
- * @param {number=} options.attempts - Each download has a few attempts before it gives up.
- * @param {Function=} options.ondownload - when the file is finally downloaded to the file system, not just to the browser
+ * @param {Object=} opts
+ * @param {string=} opts.directory
+ * @param {Function=} opts.onload
+ * @param {Function=} opts.onerror
+ * @param {string[]=[]} opts.fallbackUrls - list of urls
+ * @param {Element=} opts.element - an HTML element
+ * @param {string=} opts.mainDirectory
+ * @param {string=''} opts.directory
+ * @param {string=} opts.fileExtension
+ * @param {number=-1} opts.blobTimeout - set this value to save memory, delete a download blob object after it times out
+ * @param {number=} opts.attempts - Each download has a few attempts before it gives up.
+ * @param {Function=} opts.ondownload - when the file is finally downloaded to the file system, not just to the browser
  *  defaults to -1, no deleting
  *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
  */
-function download(fileUrl, fileName = '', directory = '', options = {}) {
-    const o = $.extend(options, {
+//TODO: remove directory parameter, put it in options
+function download(fileUrl, fileName = '', opts = {}) {
+    if (typeof opts === 'string') {
+        console.error('download() has changed, 3rd parameter is opts and NOT the directory, use opts.directory instead', opts.url);
+        opts = {directory: opts}
+    }
+
+    opts = $.extend(opts, {
         onload: function () {
         },
         onerror: function (r) {
         },
-        fallbackUrls: [], // TODO: later implement this
+        fallbackUrls: [], // TODO: implement this
         element: {},
+        directory: '',
         mainDirectory: Config.MAIN_DIRECTORY,
         fileExtension: null,
         blobTimeout: -1, // don't delete blobs
         attempts: Config.defaultDownloadAttempts,
-        ondownload: function(){
-            console.log('downloaded (even locally)', o.url);
+        ondownload: function () {
+            console.log('downloaded (even locally)', opts.url);
         }
     });
+    opts.url = fileUrl;
 
-    console.log('URL Added to downloads:', fileUrl);
-    if (!fileUrl) {
-        fileUrl = location.href;
-        console.warn('Input URL is null, using location.href');
+    console.log('URL Added to downloads:', opts.url);
+    if (!opts.url) {
+        throw 'Input URL is null';
+    }
+    // if iterable, set the URLs as fallback URLs
+    if (typeof opts.url === 'object' && typeof opts.url[Symbol.iterator] === 'function') {
+        opts.fallbackUrls.concat(opts.url);
+        opts.url = opts.url[0];
+        throw 'fallback URLs not yet implemented';
     }
 
-    // if iterable, iterate and download
-    if (typeof fileUrl === 'object' && typeof fileUrl[Symbol.iterator] === 'function') {
-        downloadBatch(fileUrl);
-        console.warn('The file url passed to be downloaded is an object, trying to download it as multiple urls:', fileUrl);
-        return;
-    }
-
+    opts.fallbackUrls = [].filter.call(opts.fallbackUrls, s => !!s);
     //
-    fileUrl = normalizeUrl((fileUrl).replace(/["]/gi, ''));
+    opts.url = normalizeUrl(String(opts.url).replace(/["]/gi, ''));
 
-    if (/^data:/.test(fileUrl) && !Config.ALLOW_BASE64_IMAGE_DOWNLOADS) {
-        console.error('The source is a base64-type, download was prevented:', fileUrl);
-        return;
+    if (/^data:/.test(opts.url) && !Config.ALLOW_BASE64_IMAGE_DOWNLOADS) {
+        console.error('The source is a base64-type, download was prevented:', opts.url);
+        throw 'The source is a base64-type, download was prevented: "' + String(opts.url) + '"';
     }
-    if (Config.BLACK_LIST.has(fileUrl)) {
-        console.warn('Blacklisted URL:', fileUrl);
-        return;
+    if (Config.BLACK_LIST.has(opts.url)) {
+        console.warn('Blacklisted URL:', opts.url);
+        throw 'URL is blacklisted';
     }
-    if (downloadedSet.has(fileUrl) && !Config.ALLOW_DUPES) {
-        throw ('Request to download duplicate file: ' + fileUrl);
+    if (downloadedSet.has(opts.url) && !Config.ALLOW_DUPES) {
+        throw ('Request to download duplicate file: ' + opts.url);
     }
 
-    fileUrl = extractFullUrlForSpecialHostnames(normalizeUrl(fileUrl));
+    opts.url = extractFullUrlForSpecialHostnames(normalizeUrl(opts.url));
 
     if (fileName && fileName.length > 1) { // if fileName passed
         var oldfName = fileName;
         fileName = cleanFileName(fileName);
         console.log(`Filename passed: "${oldfName}" -> cleaned: "${fileName}"`);
     } else {
-        if (o.element === 'object') { // if element passed: try the attributes
+        if (opts.element === 'object') { // if element passed: try the attributes
             for (const nameAttribute of Config.NAME_ATTRIBUTES) {
-                if (o.element.hasAttribute(nameAttribute)) {
-                    fileName = o.element.getAttribute(nameAttribute);
-                    console.log('Got fileName from element:', fileName, fileUrl);
+                if (opts.element.hasAttribute(nameAttribute)) {
+                    fileName = opts.element.getAttribute(nameAttribute);
+                    console.log('Got fileName from element:', fileName, opts.url);
                     break;
                 }
             }
         } else { // fall back to the url
-            fileName = nameFile(fileUrl);
+            fileName = nameFile(opts.url);
         }
     }
 
@@ -514,20 +725,20 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
         fileNumber++;
     }
 
-    if (directory && directory.length) {// if downloadDirectory passed
-        console.log('DownloadDirectory passed:', directory);
-        directory = cleanFileName(directory, true);
-        console.log('DownloadDirectory passed (clean):', directory);
+    if (opts.directory && opts.directory.length) {// if downloadDirectory passed
+        console.log('DownloadDirectory passed:', opts.directory);
+        opts.directory = cleanFileName(opts.directory, true);
+        console.log('DownloadDirectory passed (clean):', opts.directory);
     } else { // if directory NOT passed, get directory from the filename
         const split = fileName.split(/\//);
         if (split.length > 1) {
             fileName = split.pop();
-            directory = split.pop();
+            opts.directory = split.pop();
         } else {
-            directory = '';
+            opts.directory = '';
         }
     }
-    if (directory) directory += '/'; // adding trailing path terminator
+    if (opts.directory) opts.directory += '/'; // adding trailing path terminator
 
     /*
     // makes sure that there is a maximum of one backslash "/" (to prevent having too many nested directories)
@@ -535,23 +746,24 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
      downloadDirectory = result[0];
      fileName = result[1];
     */
-    let fileExtension = o.fileExtension || getFileExtension(fileUrl);
+    let fileExtension = opts.fileExtension || getFileExtension(opts.url);
 
     // remove all extra extensions
     if (fileExtension) {// don't remove it if there isn't a fileExtension
         fileName = fileName.replace(new RegExp('\.' + fileExtension, 'gi'), '');
     }
     let finalName = removeDoubleSpaces(
-        Config.MAIN_DIRECTORY + directory + Config.IndividualDirectoryName + fileName + '.' + fileExtension
+        Config.MAIN_DIRECTORY + opts.directory + Config.IndividualDirectoryName + fileName + '.' + fileExtension
     );
 
     debug && console.log(
-        'fileUrl:', fileUrl,
-        '\ndownloadDirectory:', directory,
+        'fileUrl:', opts.url,
+        '\ndownloadDirectory:', opts.directory,
         '\nfileName:', fileName,
         '\nextension:', fileExtension,
         '\nFINAL_NAME:', finalName
     );
+
 
     /**
      * options:
@@ -565,19 +777,19 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
      * ontimeout    callback to be executed if this download failed due to a timeout
      */
     GM_download({
+        url: opts.url,
         name: finalName,
-        url: fileUrl,
         onload: function onload() {
-            console.log('Download finished', finalName, '\n' + fileUrl);
-            downloadedSet.add(fileUrl);
+            console.log('Download finished', finalName, '\n' + opts.url);
+            downloadedSet.add(opts.url);
             // FIXME: error always appears stating that o.onload isn't a function
-            o.onload();
+            opts.onload();
         },
         onerror: function (r) {
-            o.onerror(r);
-            downloadedSet.delete(fileUrl); // upon failure, remove the url from the list to give it another chance.
+            opts.onerror(r);
+            downloadedSet.delete(opts.url); // upon failure, remove the url from the list to give it another chance.
             console.warn(
-                'Download failed for link:', fileUrl,
+                'Download failed for link:', opts.url,
                 '\nError:', r,
                 '\nDetails:', r.details
             );
@@ -597,11 +809,11 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
                     switch (errorCurrent.toLowerCase()) {
                         case 'server_failed': // fall-through
                         case 'network_failed':
-                            retry(fileUrl, finalName, Config.defaultDownloadAttempts);
+                            retry(opts.url, finalName, Config.defaultDownloadAttempts);
                             break;
                         case 'not_whitelisted':
                             retry(
-                                fileUrl.replace(/\?.*/, ''),
+                                opts.url.replace(/\?.*/, ''),
                                 finalName.substring(0,
                                     (finalName.lastIndexOf('?') > -1) ? finalName.lastIndexOf('?') : (finalName.length + '.oops.jpg')
                                 ),
@@ -619,7 +831,7 @@ function download(fileUrl, fileName = '', directory = '', options = {}) {
                 //                 case 'not_whitelisted':
                 //                     break;
                 default:
-                    retry(fileUrl, finalName, 1);
+                    retry(opts.url, finalName, 1);
             }
         },
         onprogress: function (p) {
