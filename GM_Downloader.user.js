@@ -258,7 +258,6 @@ unsafeWindow.storeDownloadHistory = storeDownloadHistory;
     unsafeWindow.zipImages = zipImages;
 })();
 
-// todo: make the genZip() have a timeout, that if there aren't anymore files downloading for a while, it'll automatically download
 (function extendJSZip() {
     if (typeof JSZip !== 'undefined') {
         /** The current file index being downloaded/added to the zip */
@@ -292,28 +291,50 @@ unsafeWindow.storeDownloadHistory = storeDownloadHistory;
             }
             return this.file('index.html', new Blob([html], {type: 'text/plain'}));
         };
-        JSZip.prototype.zipGenerated = false; // has the zip been generated/downloaded?
+        JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
+        JSZip.prototype.zipName = '';
         /**called when the zip is generated*/
+        // TODO: maybe use an EventEmitter instead of setting a single function
         JSZip.prototype.onGenZip = function () {
             console.log('onGenZip()', this);
         };
-        JSZip.prototype.genZip = function genZip(name = '$name$') {
-            return this.generateAsync({type: 'blob'}).then(blob => {
-                const objectUrl = URL.createObjectURL(blob);
-                this.zipName = name.replace('$name$', this.zipName || document.title);
+        JSZip.prototype.genZip = function genZip(updateCallback = null) {
 
-                GM_download({
-                    url: objectUrl,
-                    name: `${Config.MAIN_DIRECTORY}/${this.zipName} [${Object.keys(this.files).length}].zip`,
-                    onload: function() {
-                        this.onDownload && this.onDownload();
+            if (!updateCallback) updateCallback = metadata => {
+                if (++this.__ongenzipProgressCounter % 50 === 0) {
+                    console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
+                    if (metadata.currentFile) {
+                        console.log('current file = ' + metadata.currentFile);
+                    }
+                }
+            };
+
+            this.__ongenzipProgressCounter = 0;
+            return this.generateIndexHtml()
+                .generateAsync({type: 'blob'}, updateCallback)
+                .then(blob => {
+                    const objectUrl = URL.createObjectURL(blob);
+                    console.debug('zip objectUrl', objectUrl);
+
+                    //TODO: replace this with GM_downloadPromise and return that
+                    const name = this.zipName.replace('$name$', this.zipName || document.title);
+                    GM_download({
+                        url: objectUrl,
+                        name: `${Config.MAIN_DIRECTORY}${name} [${Object.keys(this.files).length}].zip`,
+                        onload: function () {
+                            this.onDownload && this.onDownload();
+                        }
+                    });
+                    this.isZipGenerated = true;
+
+                    this.onGenZip && this.onGenZip();
+
+                    // remove from pendingZips set
+                    var result = pendingZips.delete(this);
+                    if (result === false) {
+                        console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
                     }
                 });
-                this.zipGenerated = true;
-
-                // this.dispatchEvent(new Event('genzip'));
-                this.onGenZip && this.onGenZip();
-            });
         };
         /**
          * @param fname:    the desired file name
@@ -797,6 +818,8 @@ function zipImages(imgList, zipName) {
                 console.error('Not image data!', res.responseText);
                 return false;
             }
+            //FIXME: you can't call this here
+            //TODO: make it possible to enqueue more files to a zip that's already working
             requestAndZipFile(ddgProxy(fileUrl), fileName);
         } else { // if is a proxy url and it failed, just give up
             return true;
@@ -813,39 +836,53 @@ function zipImages(imgList, zipName) {
  * @param zipName
  * @return {JSZip}
  */
-function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
+function zipFiles(fileUrls, zipName = '') {
     const zip = new JSZip();
     zip.zipName = (zipName ? zipName : document.title).replace(/\//g, ' ');
-    zip.progressBar = setupProgressBar();
+    var pb = zip.progressBar; // init progressBar
+    zip.xhrList = [];
 
-
-    const selector = `img.img-big`;
-    const files = Array.from(fileUrls ? fileUrls : qa(selector)).map(file => {
+    /**
+     * extract name and url from
+     * @param {Object|string} file
+     * @returns {({fileURL, fileName})}
+     */
+    const normalizeFile = file => {
         if (!file) return;
-        if (file.slice && file.indexOf) { // if string
-            file = {fileURL: file};
+        if (typeof file === 'string') { // if string
+            //TODO: name is never specified here
+            return {
+                fileURL: file,
+                fileName: nameFile(file) || 'untitled.unkownformat.gif'
+            };
         }
 
         function getFirstProperty(o, properties) {
             if (!o) return null;
             for (const p of properties) {
-                if (o.hasOwnProperty(p))
+                if (o[p])
                     return o[p];
             }
         }
 
-        file.fileURL = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
-        file.fileName = getFirstProperty(file, ['fileName', 'alt', 'title']) || nameFile(file.fileURL) || 'Untitled';
-        return file;
-    }).filter(file => !!file);
-    zip.zipTotal = Array.from(files).length;
+        return {
+            fileURL: getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']),
+            fileName: getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.fileURL) || 'Untitled',
+        };
+    };
+
+    const files = Array.from(fileUrls ? fileUrls : document.querySelectorAll('img.img-big'))
+        .map(normalizeFile)
+        .filter(file => !!file);
+    zip.zipTotal = files.length;
 
     window.addEventListener('beforeunload', zipBeforeUnload);
-    console.log('zipping images:', files);
+    console.log('zipping files:', files);
 
     for (const file of files)
         try {
-            requestAndZipFile(file.fileURL, file.fileName);
+            const xhr = requestAndZipFile(file.fileURL, file.fileName);
+            zip.xhrList.push(xhr);
         } catch (r) {
             console.error(r);
         }
@@ -857,7 +894,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
      * @param fileName
      * @param onBadResponse function(response): a function which is passed the response in both onload and onerror
      */
-    function requestAndZipFile(fileUrl, fileName, onBadResponse) {
+    function requestAndZipFile(fileUrl, fileName, onBadResponse = () => null) {
         var fileSize = 0;
         zip.loadedLast = 0;
         zip.activeZipThreads++;
@@ -887,7 +924,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                     '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
                 );
 
-                if (typeof onBadResponse === 'function' && onBadResponse(res, fileUrl)) {
+                if (onBadResponse(res, fileUrl)) {
                     zip.current++;
                     return;
                 }
@@ -927,7 +964,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                 }
             },
             onerror: function (res) {
-                if (typeof onBadResponse === 'function' && onBadResponse(res, fileUrl)) {
+                if (onBadResponse(res, fileUrl)) {
                     return;
                 }
 
@@ -948,7 +985,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                 if (abortCondition && false) {
                     if (xhr.abort) {
                         xhr.abort();
-                        console.log('GM_xmlhttpRequest ABORTED zip!!!!!');
+                        console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
                     } else
                         console.error('xhr.abort not defined');
                     return;
@@ -966,18 +1003,16 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                     zip.totalLoaded += justLoaded;
                     const totalProgress = zip.totalLoaded / zip.totalSize;
 
-                    if (false) {
-                        console.debug(
-                            'loadedSoFar:', res.loaded,
-                            '\njustLoaded:', loadedSoFar - zip.loadedLast,
-                            '\nfileprogress:', loadedSoFar / res.total
-                        );
-                    }
+                    console.debug(
+                        'loadedSoFar:', res.loaded,
+                        '\njustLoaded:', loadedSoFar - zip.loadedLast,
+                        '\nfileprogress:', fileprogress
+                    );
 
                     const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
-                    if (typeof progressBar !== 'undefined') {
-                        progressBar.set(totalProgress);
-                        progressBar.setText(progressText);
+                    if (typeof progressBar !== 'undefined' && zip.progressBar) {
+                        zip.progressBar.set(totalProgress);
+                        zip.progressBar.setText(progressText);
                     } else {
                         var progressbarContainer;
                         if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
@@ -989,6 +1024,7 @@ function zipFiles(fileUrls, zipName = '', onBadResponse = () => null) {
                 }
             }
         });
+        //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
         return xhr;
     }
 
