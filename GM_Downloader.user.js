@@ -140,50 +140,15 @@ unsafeWindow.downloadedSet = downloadedSet;
  *   params: String | Object,
  *   headers: Object
  * }
- * @returns {Promise}
- * @constructor
+ * @returns {(RequestPromise|Promise)}
  */
-function GM_fetch_(url, opts = {}) {
-    var xhr;
-
-    // // this alows for calling it like this: fetch({ url:..., onload=...})
-    // if (typeof url === 'object' && !opts) {
-    //     url.url = url;
-    //     opts = url;
-    //     url = opts.url;
-    //     console.log('swapping url and opts: url, opts =', url, opts);
-    // }
-
-    const promise = new Promise(function (resolve, reject) {
-        const details = $.extend(opts, {
-            url: opts.url || url,
-        });
-
-        /** @param {GMResponse} res */
-        details.onload = function (res) {
-            if (res.status >= 200 && res.status < 300) {
-                resolve(this.response);
-            } else {
-                reject(res);
-            }
-        };
-        /** @param {GMResponse} res */
-        details.onerror = function (res) {
-            reject(res);
-        };
-
-        xhr = GM_xmlhttpRequest(details);
-    });
-
-    promise.abort = () => xhr.abort();
-    return promise;
+function GM_fetch(url, opts = {}) {
+    opts.fetch = true;
+    return GM_xmlhttpRequestPromise(url, opts);
 }
 
-GM_xmlhttpRequest.prototype.fetch = GM_fetch_;
-GM_xmlhttpRequest.fetch = GM_fetch_;
-unsafeWindow.GM_xmlhttpRequest = GM_xmlhttpRequest;
-unsafeWindow.GM_fetch_ = GM_fetch_;
-unsafeWindow.GM_downloadPromise = GM_downloadPromise;
+GM_xmlhttpRequest.fetch = GM_fetch;
+
 
 /** returns full path, not just partial path */
 var normalizeUrl = (function () {
@@ -377,6 +342,7 @@ unsafeWindow.storeDownloadHistory = storeDownloadHistory;
     }
 })();
 
+
 function storeDownloadHistory() {
     if (downloadedSet.size <= 0) return;
     const storedDlH = GM_getValue('downloadHistory', []),
@@ -405,7 +371,7 @@ function setNameFilesByNumber(newValue) {
 }
 
 
-/** if there's a **special** as gify.com, the big url can be extracted */
+/** if there's a **special** hostname url (like gify.com), the big url can be extracted */
 function extractFullUrlForSpecialHostnames(fileUrl) {
     if (new URL(fileUrl).hostname.indexOf('gfycat.com') === 0) {
         fileUrl = fileUrl.replace(/gfycat\.com/i, 'giant.gfycat.com') + '.webm';
@@ -648,7 +614,6 @@ function download_raw(o) {
  *  defaults to -1, no deleting
  *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
  */
-//TODO: remove directory parameter, put it in options
 function download(fileUrl, fileName = '', opts = {}) {
     if (typeof opts === 'string') {
         console.error('download() has changed, 3rd parameter is opts and NOT the directory, use opts.directory instead', opts.url);
@@ -844,6 +809,7 @@ function download(fileUrl, fileName = '', opts = {}) {
     });
 }
 
+
 /**
  * basic promise that will be built up on later, pure GM_download promise
  * @param url
@@ -852,21 +818,18 @@ function download(fileUrl, fileName = '', opts = {}) {
  * @constructor
  */
 function GM_downloadPromise(url, opts = {}) {
-    var promise;
     var xhr = {};
     var details = $.extend({
         url: url,
+        name: 'untitled.gif',
         headers: undefined,
         saveAs: false,
         timeout: undefined,
     }, opts);
-
-    // FIXME: the executor is running too early as I had feared, try to make every setter function check if onload
-    promise = new Promise(function (resolve, reject) {
+    const promise = new Promise(function (resolve, reject) {
         console.debug('promise.execute()');
         details = $.extend(details, {
             url: url,
-            name: opts.name || 'untitled.gif',
             // actual callbacks (passed by user)
             _onload: () => undefined,
             _onerror: () => undefined,
@@ -874,9 +837,13 @@ function GM_downloadPromise(url, opts = {}) {
             _ontimeout: () => undefined,
 
             // the functions that the user passes
-            onload: function (e) {
-                details._onload(e);
-                resolve(e);
+            onload: function (res) {
+                if (res && res.status >= 200 && res.status < 300) {
+                    details._onload(res);
+                    resolve(res);
+                } else {
+                    reject(res);
+                }
             },
             onerror: function (r) {
                 details._onerror(r);
@@ -891,22 +858,68 @@ function GM_downloadPromise(url, opts = {}) {
             },
         });
 
+        //HACK: delay so `details` isn't passed immediately giving the promise time to be constructed
+        //      (promise.onprogress().onload().onerror()....)
         setTimeout(function () {
-            console.debug('GM_download()');
-            xhr = GM_download(details);
-        }, 0);
+            console.log('GM_download(', details, ')\n ->', promise);
+            try {
+                xhr = GM_download(details);
+            } catch (e) {
+                reject(e);
+            }
+        }, 1);
     });
-
-    promise.abort = () => (xhr && xhr.abort && xhr.abort());
 
     // those are the setters (the ones used in the chain)
     bindPromiseSetters(promise, details);
 
+    promise.onload = promise.then;
+    promise.abort = () => {
+        if (xhr && xhr.abort) {
+            xhr.abort();
+        } else {
+            setTimeout(function () {
+                promise.abort();
+            }, 0);
+        }
+    };
+
+
     return promise;
 }
 
+/**
+ * @typedef {Promise} RequestPromise
+ * @property {Function} onload - identical to `promise.then()`
+ * @property {Function} onerror -
+ * @property {Function} onprogress -
+ * @property {Function} ontimeout -
+ * @property {Function} onabort -
+ * @property {Function} onloadstart -
+ * @property {Function} onreadystatechange -
+ */
+
+/**
+ * TODO: complete docs
+ * @param {string} url
+ * @param {Object} opts
+ * @param {(*|string)=} opts.url - same as url, the first one is stronger
+ * @param {string='GET'} opts.method - 'GET' or 'POST'
+ * @param {(*)=} opts.headers -
+ * @param {(*)=} opts.data -
+ * @param {boolean=false} opts.binary -
+ * @param {number=} opts.timeout -
+ * @param {Object=} opts.context -
+ * @param {(*)=} opts.responseType -
+ * @param {string=} opts.overrideMimeType -
+ * @param {string=false} opts.anonymous -
+ * @param {boolean=false} opts.fetch -
+ * @param {(*|string)=} opts.username -
+ * @param {(*|string)=} opts.password -
+ * @returns {RequestPromise}
+ */
 function GM_xmlhttpRequestPromise(url, opts = {}) {
-    var promise;
+    var xhr = {};
     var details = $.extend({
         url: url,
         method: 'GET',
@@ -922,10 +935,8 @@ function GM_xmlhttpRequestPromise(url, opts = {}) {
         username: undefined,
         password: undefined,
     }, opts);
-    var xhr = {};
 
-
-    promise = new Promise(function (resolve, reject) {
+    const promise = new Promise(function (resolve, reject) {
         console.debug('promise.execute()');
         details = $.extend(details, {
             url: url,
@@ -943,7 +954,7 @@ function GM_xmlhttpRequestPromise(url, opts = {}) {
             // password: null,
 
 
-            // actual callbacks (passed by user)
+            /// actual callbacks (passed by user)
             _onload: () => undefined,
             _onerror: () => undefined,
             _onprogress: () => undefined,
@@ -952,11 +963,14 @@ function GM_xmlhttpRequestPromise(url, opts = {}) {
             _onloadstart: () => undefined,
             _onreadystatechange: () => undefined,
 
-
-            // the functions that the user passes
-            onload: function (e) {
-                details._onload(e);
-                resolve(e);
+            /// the functions that the user passes
+            onload: function (res) {
+                if (res && res.status >= 200 && res.status < 300) {
+                    details._onload(res);
+                    resolve(res);
+                } else {
+                    reject(res);
+                }
             },
             onerror: function (r) {
                 details._onerror(r);
@@ -976,32 +990,99 @@ function GM_xmlhttpRequestPromise(url, opts = {}) {
             onloadstart: function (e) {
                 details._onloadstart(e);
             },
-            onreadystatechange: e => {
+            onreadystatechange: function (e) {
                 details._onreadystatechange(e);
             },
         });
 
         setTimeout(function () {
-            console.debug('GM_xmlhttpRequest()');
-            xhr = GM_xmlhttpRequest(details);
+            console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
+
+            try {
+                xhr = GM_xmlhttpRequest(details);
+            } catch (e) {
+                reject(e);
+            }
+
         }, 0);
     });
 
-    promise.abort = () => (xhr && xhr.abort && xhr.abort());
-
-
     // those are the setters (the ones used in the chain)
     bindPromiseSetters(promise, details);
+    // promise.onload = undefined;
+    // promise.onerror = undefined;
+    promise.abort = () => {
+        if (xhr && xhr.abort) {
+            xhr.abort();
+        } else {
+            setTimeout(function () {
+                promise.abort();
+            }, 0);
+        }
+    };
 
-    console.log(
-        'GM_xmlhttpRequestPromise:' +
-        '\npromise:', promise,
-        '\ndetails:', details
-    );
     return promise;
 }
-unsafeWindow.GM_xmlhttpRequestPromise = GM_xmlhttpRequestPromise;
 
+try {
+    (function () {
+        return;
+        // //BOOKMARK: was fixing message passsing between successive promise.onload().then()
+        GM_xmlhttpRequestPromise('https://i.ytimg.com/vi/RO90omga8D4/maxresdefault.jpg', {
+            responseType: 'arraybuffer',
+            binary: true,
+            // 		method: 'POST',
+        })
+            .onprogress(function (e) {
+                console.log(
+                    'onprogress()',
+                    '\nlengthComputable:', e.lengthComputable,
+                    '\nloaded:', e.loaded,
+                    '\nposition:', e.position,
+                    '\ntotal:', e.total,
+                    '\ntotalSize:', e.totalSize,
+                    '\n', e
+                );
+            })
+            .ontimeout(function (e) {
+                console.log('ontimeout()', e);
+            })
+            .onabort(function (e) {
+                console.log('onabort()', e);
+            })
+            .onloadstart(function (e) {
+                console.log('onloadstart()', e);
+            })
+            .onreadystatechange(function (e) {
+                console.log('onreadystatechange(), readyState=', e.readyState, '\n', e);
+            })
+
+
+            .onerror(function (e) {
+                console.log('onerror()', e);
+            })
+            .onload(function (e) {
+                console.log('onload(): SUCCESS!!!', e);
+                return 'onloadReturn';
+            })
+            .then(e => {
+                if (e === 'onloadReturn') {
+                    console.log('AMAZING!!!!!!! onload successfully passed data to then()!!!!');
+                }
+                console.log('then1():', e);
+                return {bekfast: 'bekfast1'};
+            })
+            .then(e => {
+                console.log('then2():', e);
+            })
+            .onload(function (e) {
+                console.log('onload() after then()', e);
+            });
+
+    })();
+} catch (e) {
+    console.error(e);
+}
 
 function retry(fileUrl, finalName, count) {
     console.log('RETRYING:', fileUrl);
@@ -1135,7 +1216,7 @@ function clearUrlGibberish(str) {
  * @param {string=} name
  * @param {string=} target
  */
-function anchorClick(url, name, target = 'self') {
+function anchorClick(url, name = '', target = 'self') {
     name = name || nameFile(url) || 'filename';
 
     var a = document.createElement('a');
@@ -1497,7 +1578,8 @@ function imageUrl2blob(url, callback, callbackParams) {
                 if (!!callback) {
                     callback(blob, url, callbackParams);
                 } else {
-                    saveAs(blob, 'untitled.' + ext);
+                    if (typeof saveAs === 'function')
+                        saveAs(blob, 'untitled.' + ext);
                 }
 
                 console.debug('GM_xmlhttpRequest load', res, 'myblob:', blob);
