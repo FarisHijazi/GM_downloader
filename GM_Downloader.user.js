@@ -641,13 +641,30 @@
         if (fileUrl === opts) fileUrl = opts.url;
         if (fileName === opts) fileName = opts.name;
 
-        opts = $.extend(opts, {
-            onload: function () {
-            },
-            onerror: function (r) {
-            },
-            fallbackUrls: [], // TODO: implement this
-            element: {},
+        // if opts was an element
+        if (opts instanceof Element) {
+            console.warn('download(): element passed in place of opts');
+            var element = opts;
+            opts = {element: element};
+
+            for (const prop of ['url', 'name', 'directory', 'onload', 'onerror', 'fallbackUrls', 'element', 'mainDirectory', 'directory', 'fileExtension', 'blobTimeout', 'attempts', 'ondownload',]) {
+                opts[prop] = element[prop];
+            }
+        }
+        if (typeof opts.attempts === 'number') {
+            if (opts.attempts > 0) {
+                opts.attempts--;
+            } else {
+                console.debug('download(): ran out of attempts');
+                return;
+            }
+        }
+
+        // extending defaults
+        opts = $.extend({
+            url: fileUrl,
+            name: fileName,
+            fallbackUrls: typeof (PProxy) !== 'undefined' && PProxy.proxyList ? PProxy.proxyList(fileUrl) : [], // TODO: implement this
             directory: '',
             fileExtension: null,
             blobTimeout: -1, // don't delete blobs
