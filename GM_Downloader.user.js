@@ -441,24 +441,12 @@
                     '\nError:', r,
                     '\nDetails obj:', details
                 );
-                // return; // FIXME: this entire thing is messed up, fix the retry system
-
-
-                /**
-                 error - error reason
-                 not_enabled,
-                 not_whitelisted,
-                 not_permitted,
-                 not_supported,
-                 not_succeeded, - the download wasn't started or failed, the details attribute may provide more information
-                 */
-                var error = r.error;
 
                 if (o.attempts > 0) { // retry
                     console.log('retry:', details);
                     o.attempts--;
 
-                    switch (error) {
+                    switch (r.error) {
                         case 'not_succeeded':
                             switch (r.details.current.toLowerCase()) {
                                 case 'server_failed': // fall-through
@@ -602,36 +590,56 @@
             }
         }
 
-        promise = GM_xmlhttpRequest(details);
+        promise = GM_xmlhttpRequestPromise(details);
         return promise;
     }
 
-    //TODO: add support for passing url patterns
     /**
-     * @param {string|Element} fileUrl the url to the file to download
-     * @param {string} fileName - gets extracted by default
-     *
-     * @param {Object=} opts
-     * @param {string=} opts.url
-     * @param {string=} opts.directory
-     * @param {Function=} opts.onload
-     * @param {Function=} opts.onerror
-     * @param {string[]=[]} opts.fallbackUrls - list of urls
-     * @param {Element=} opts.element - an HTML element
-     * @param {string=} opts.mainDirectory
-     * @param {string=''} opts.directory
-     * @param {string=} opts.fileExtension
-     * @param {number=-1} opts.blobTimeout - set this value to save memory, delete a download blob object after it times out
-     * @param {number=} opts.attempts - Each download has a few attempts before it gives up.
-     * @param {Function=} opts.ondownload - when the file is finally downloaded to the file system, not just to the browser
-     *  defaults to -1, no deleting
+     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
+     * @property {string}    url
+     * @property {string}    name
+     * @property {bool}      [rename=true]
+     * @property {string}    directory
+     * @property {string[]}  fallbackUrls - list of urls
+     * @property {Element}   element - an HTML element
+     * @property {string}    mainDirectory
+     * @property {string}    directory
+     * @property {string}    fileExtension
+     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
+     * @property {number}    attempts - Each download has a few attempts before it gives up.
+     * @property {Function}  onload
+     * @property {Function}  onerror
+     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
      *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
      */
+
+    //TODO: add support for passing url patterns
+    /**
+     * @param {(string|Element|downloadOptions)} fileUrl the url to the file to download
+     * @param {string=} fileName - gets extracted by default
+     * @param {(downloadOptions|Object)=} opts - options, note, this is always the last argument
+     *      so if only one parameter is passed, it will be considered the options object
+     */
     function download(fileUrl, fileName = '', opts = {}) {
+        const args = Array.from(arguments);
+        opts = args.pop();
+        // if opts was a string (probably directory)
         if (typeof opts === 'string') {
-            console.error('download() has changed, 3rd parameter is opts and NOT the directory, use opts.directory instead', opts.url);
-            opts = {directory: opts}
+            switch (arguments.length) {
+                case 1: // just url
+                    opts = {url: fileUrl};
+                    break;
+                case 2: // no fileName
+                    opts = {name: fileName};
+                    break;
+                case 3: // directory was passed as opts
+                    console.warn('download() parameters were updated, 3rd parameter NOT the directory, use opts.directory instead', opts.url);
+                    opts = {directory: opts};
+                    break;
+            }
         }
+        if (fileUrl === opts) fileUrl = opts.url;
+        if (fileName === opts) fileName = opts.name;
 
         opts = $.extend(opts, {
             onload: function () {
@@ -641,30 +649,37 @@
             fallbackUrls: [], // TODO: implement this
             element: {},
             directory: '',
-            mainDirectory: Config.MAIN_DIRECTORY,
             fileExtension: null,
             blobTimeout: -1, // don't delete blobs
             attempts: Config.defaultDownloadAttempts,
-            ondownload: function () {
-                console.log('downloaded (even locally)', opts.url);
-            }
-        });
-        opts.url = fileUrl;
+            element: undefined,
+            mainDirectory: Config.MAIN_DIRECTORY,
+            rename: true,
+            onload: function (e) {
+                console.debug('download():  onload()', e);
+            },
+            onerror: function (e) {
+                console.warn('download():  onerror()', e);
+            },
+            ondownload: function (e) {
+                console.log('download(): ondownload() downloaded (even locally)', opts.url, '\n', e);
+            },
+        }, opts);
 
         console.log('URL Added to downloads:', opts.url);
-        if (!opts.url) {
-            throw 'Input URL is null';
-        }
+
         // if iterable, set the URLs as fallback URLs
         if (typeof opts.url === 'object' && typeof opts.url[Symbol.iterator] === 'function') {
             opts.fallbackUrls.concat(opts.url);
             opts.url = opts.url[0];
             throw 'fallback URLs not yet implemented';
         }
-
         opts.fallbackUrls = [].filter.call(opts.fallbackUrls, s => !!s);
+
+        if (!opts.url) throw 'Input URL is null';
+
         //
-        opts.url = normalizeUrl(String(opts.url).replace(/["]/gi, ''));
+        opts.url = extractFullUrlForSpecialHostnames(String(opts.url).replace(/["]/gi, ''));
 
         if (/^data:/.test(opts.url) && !Config.ALLOW_BASE64_IMAGE_DOWNLOADS) {
             console.error('The source is a base64-type, download was prevented:', opts.url);
@@ -675,130 +690,118 @@
             throw 'URL is blacklisted';
         }
         if (downloadedSet.has(opts.url) && !Config.ALLOW_DUPES) {
-            throw ('Request to download duplicate file: ' + opts.url);
+            throw 'Request to download duplicate file: "' + opts.url + '"\nto avoid this, set Config.ALLOW_DUPES=true';
         }
 
-        opts.url = extractFullUrlForSpecialHostnames(normalizeUrl(opts.url));
 
-        if (fileName && fileName.length > 1) { // if fileName passed
-            var oldfName = fileName;
-            fileName = cleanFileName(fileName);
-            console.log(`Filename passed: "${oldfName}" -> cleaned: "${fileName}"`);
-        } else {
-            if (opts.element === 'object') { // if element passed: try the attributes
-                for (const nameAttribute of Config.NAME_ATTRIBUTES) {
-                    if (opts.element.hasAttribute(nameAttribute)) {
-                        fileName = opts.element.getAttribute(nameAttribute);
-                        console.log('Got fileName from element:', fileName, opts.url);
-                        break;
-                    }
-                }
-            } else { // fall back to the url
-                fileName = nameFile(opts.url);
-            }
+        // == naming the file
+
+        if (opts.rename === true) {
+            opts.name = cleanFileName(opts.name) || // if opts.name passed
+                getNameFromElement(opts.element) || //
+                nameFile(opts.url) ||
+                'a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(opts.name))) + ' ' + (++fileNumber);
         }
+        opts.rename = false; // set to false for successive retries (otherwise the name would be ruined)
+        // TODO: kill global variables (kill fileNumber)
 
-        if (!fileName) {
-            fileName = 'a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(fileName))) + ' ' + (fileNumber);
-            fileNumber++;
-        }
+        // == naming the directory
 
-        if (opts.directory && opts.directory.length) {// if downloadDirectory passed
-            console.log('DownloadDirectory passed:', opts.directory);
+        if (opts.directory) {// if downloadDirectory passed
             opts.directory = cleanFileName(opts.directory, true);
-            console.log('DownloadDirectory passed (clean):', opts.directory);
         } else { // if directory NOT passed, get directory from the filename
-            const split = fileName.split(/\//);
+            const split = opts.name.split(/\//);
             if (split.length > 1) {
-                fileName = split.pop();
-                opts.directory = split.pop();
+                [opts.name, opts.directory] = [split.pop(), split.pop()];
             } else {
                 opts.directory = '';
             }
         }
-        if (opts.directory) opts.directory += '/'; // adding trailing path terminator
+        if (opts.directory && opts.directory.slice(-1) !== '/') // adding trailing path terminator
+            opts.directory += '/';
 
-        /*
-        // makes sure that there is a maximum of one backslash "/" (to prevent having too many nested directories)
-         let result = limitBackslashes(fileName);
-         downloadDirectory = result[0];
-         fileName = result[1];
-        */
+        // == file extension
         let fileExtension = opts.fileExtension || getFileExtension(opts.url);
-
-        // remove all extra extensions
-        if (fileExtension) {// don't remove it if there isn't a fileExtension
-            fileName = fileName.replace(new RegExp('\.' + fileExtension, 'gi'), '');
-        }
-        let finalName = removeDoubleSpaces(
-            Config.MAIN_DIRECTORY + opts.directory + Config.IndividualDirectoryName + fileName + '.' + fileExtension
-        );
+        // remove all extra extensions (don't remove it if there isn't a fileExtension)
+        if (fileExtension) opts.name = opts.name.replace(RegExp('\.' + fileExtension, 'gi'), '');
 
         debug && console.log(
             'fileUrl:', opts.url,
             '\ndownloadDirectory:', opts.directory,
-            '\nfileName:', fileName,
             '\nextension:', fileExtension,
-            '\nFINAL_NAME:', finalName
+            '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
+            '\nopts:', opts,
         );
 
+        // TODO: maybe the function should just stop here, maybe it should just be for renaming/building the opts
+        //  this is the point where we just call download_raw or something..
 
-        /**
-         * options:
-         * url          - the URL from where the data should be downloaded
-         * name         - the filename - for security reasons the file extension needs to be whitelisted at Tampermonkey's options page
-         * headers      - see GM_xmlhttpRequest for more details
-         * saveAs       - boolean value, show a saveAs dialog
-         * onerror      callback to be executed if this download ended up with an error
-         * onload       callback to be executed if this download finished
-         * onprogress   callback to be executed if this download made some progress
-         * ontimeout    callback to be executed if this download failed due to a timeout
-         */
-        GM_download({
-            url: opts.url,
-            name: finalName,
-            onload: function onload() {
-                console.log('Download finished', finalName, '\n' + opts.url);
+
+        // extending defaults (to prevent null function issues)
+        let details = $.extend({
+            url: undefined,
+            name: undefined,
+            headers: undefined,
+            saveAs: undefined,
+            timeout: undefined,
+
+            onload: function (e) {
+                // console.debug('onload()', e);
+            },
+            onprogress: function (e) {
+                // console.debug('onprogress()', e);
+            },
+            onerror: function (e) {
+                // console.debug('onerror()', e);
+            },
+            ontimeout: function (e) {
+                // console.debug('ontimeout()', e);
+            },
+        }, opts);
+
+        // force these functions to be passed
+        details = $.extend(details, {
+            name: removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
+            onload: function onload(e) {
+                console.log('Download finished', opts.name, '\n' + opts.url, e);
                 downloadedSet.add(opts.url);
-                // FIXME: error always appears stating that o.onload isn't a function
-                opts.onload();
+                if (typeof (opts.onload) === 'function')
+                    opts.onload(e);
             },
             onerror: function (r) {
-                opts.onerror(r);
+                //EXP: note: this needs to be changed to onerrorfinal once onerrorfinal is implemented
+                if (opts.attempts === 1) // this is the last attempt
+                    if (typeof (opts.onerror) === 'function')
+                        opts.onerror(r);
+
                 downloadedSet.delete(opts.url); // upon failure, remove the url from the list to give it another chance.
                 console.warn(
                     'Download failed for link:', opts.url,
                     '\nError:', r,
                     '\nDetails:', r.details
                 );
-                /**
-                 error - error reason
-                 not_enabled,
-                 not_whitelisted,
-                 not_permitted,
-                 not_supported,
-                 not_succeeded, - the download wasn't started or failed, the details attribute may provide more information
-                 */
-                const error = r.error;
-
-                switch (error) {
+                switch (r.error.toLowerCase()) {
                     case 'not_succeeded':
-                        const errorCurrent = r.details.current;
-                        switch (errorCurrent.toLowerCase()) {
-                            case 'server_failed': // fall-through
-                            case 'network_failed':
-                                retry(opts.url, finalName, Config.defaultDownloadAttempts);
-                                break;
+                        switch (r.details.current.toLowerCase()) {
                             case 'not_whitelisted':
-                                retry(
-                                    opts.url.replace(/\?.*/, ''),
-                                    finalName.substring(0,
-                                        (finalName.lastIndexOf('?') > -1) ? finalName.lastIndexOf('?') : (finalName.length + '.oops.jpg')
-                                    ),
-                                    Config.defaultDownloadAttempts);
+                                opts.url = opts.url.replace(/\?.*/, '');
+                                opts.name = opts.name.substring(0,
+                                    (opts.name.lastIndexOf('?') > -1) ?
+                                        opts.name.lastIndexOf('?') :
+                                        (opts.name.length + '.oops.jpg')
+                                );
+                                download(opts);
                                 break;
                             case 'user_canceled':
                                 console.log('Download canceled by user.');
+                                break;
+                            case 'server_forbidden':
+                            case 'server_failed':
+                            case 'network_failed':
+                            default:
+                                if (opts.fallbackUrls.length)
+                                    opts.url = opts.fallbackUrls.shift();
+                                download(opts);
                                 break;
                         }
                         break;
@@ -806,21 +809,15 @@
                     case 'not_permitted':
                     case 'not_supported':
                         break;
-                    //                 case 'not_whitelisted':
-                    //                     break;
                     default:
-                        retry(opts.url, finalName, 1);
+                        opts.attempts = 1;
+                        download(opts);
                 }
             },
-            onprogress: function (p) {
-                console.debug('Progress:', p);
-            },
-            saveAs: false,
-            headers: null,
-            ontimeout: function () {
-            },
         });
-    };
+
+        GM_download(details);
+    }
 
 
     /**
@@ -1096,47 +1093,6 @@
     } catch (e) {
         console.error(e);
     }
-
-    function retry(fileUrl, finalName, count) {
-        console.log('RETRYING:', fileUrl);
-        // noinspection JSUnresolvedFunction
-        GM_download({
-            name: finalName,
-            url: fileUrl,
-            onload: onload,
-            onerror: function () {
-                if (count > 0) {
-                    retry(fileUrl, finalName, --count);
-                } else {
-                    // noinspection JSUnresolvedFunction
-                    GM_download({
-                        name: `${Config.MAIN_DIRECTORY}/${nameFile(fileUrl)}.${getFileExtension(fileUrl)}`,
-                        url: fileUrl,
-                        onload: onload,
-                        onerror: onerrorFinal
-                    });
-
-                }
-            }
-        });
-
-        function onerrorFinal(rr) {
-            if (!isDdgUrl(fileUrl)) {
-                GM_download({
-                    name: `${finalName}.${getFileExtension(fileUrl)}`,
-                    url: ddgProxy(fileUrl),
-                    onload: onload,
-                    onerror: function (rrr) {
-                        downloadedSet.delete(fileUrl); // upon failure, remove the url from the list to give it another chance.
-                        console.error('Download failed:', fileUrl, rrr);
-                    }
-                });
-            }
-            downloadedSet.delete(fileUrl); // upon failure, remove the url from the list to give it another chance.
-            console.error('Download failed:', finalName, fileUrl, rr);
-        }
-    }
-
 
     /**
      * @deprecated
@@ -1642,6 +1598,16 @@
             }
         } else
             return '';
+    }
+
+    function getNameFromElement(element) {
+        if (!(element instanceof Element)) return;
+        for (const attrName of Config.NAME_ATTRIBUTES) {
+            const attrValue = element.getAttribute(attrName);
+            if (attrValue) {
+                return attrValue;
+            }
+        }
     }
 
     unsafeWindow.JSZip = JSZip;
