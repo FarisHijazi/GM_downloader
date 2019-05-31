@@ -279,6 +279,10 @@
                             name: `${Config.MAIN_DIRECTORY}${name} [${Object.keys(this.files).length}].zip`,
                             onload: function () {
                                 this.onDownload && this.onDownload();
+                            },
+                            onerror: function (e) {
+                                console.warn('couldn\'t download zip', this, e);
+                                saveByAnchor(objectUrl, name + '.zip');
                             }
                         });
                         this.isZipGenerated = true;
@@ -552,12 +556,18 @@
                         if (typeof callback === 'function')
                             ret = callback(e);
 
-                        return ret !== undefined ? ret : promise;
+                        var newPromise = (ret instanceof Promise) ?
+                            ret :
+                            Promise.resolve(ret);
+
+                        return _bindPromiseSetters(newPromise, details);
                     };
-                    return promise;
+                    return this;
                 }
             }
         }
+
+        return promise;
     }
 
     function _detectXml(text) {
@@ -791,8 +801,10 @@
                 opts[prop] = element[prop];
             }
         }
+
+        // check if there are enough attempts remaining
         if (typeof opts.attempts === 'number') {
-            if (opts.attempts > 0) {
+            if (opts.attempts > 0 || opts.fallbackUrls && opts.fallbackUrls.length) {
                 opts.attempts--;
             } else {
                 console.debug('download(): ran out of attempts');
@@ -804,9 +816,9 @@
         opts = $.extend({
             url: fileUrl,
             name: fileName,
-            fallbackUrls: typeof (PProxy) !== 'undefined' && PProxy.proxyList ? PProxy.proxyList(fileUrl) : [], // TODO: implement this
+            fallbackUrls: typeof (PProxy) !== 'undefined' && PProxy.proxyList ? PProxy.proxyList(fileUrl) : [],
             directory: '',
-            fileExtension: null,
+            fileExtension: undefined,
             blobTimeout: -1, // don't delete blobs
             attempts: Config.defaultDownloadAttempts,
             element: undefined,
@@ -828,8 +840,8 @@
         // if iterable, set the URLs as fallback URLs
         if (typeof opts.url === 'object' && typeof opts.url[Symbol.iterator] === 'function') {
             opts.fallbackUrls.concat(opts.url);
-            opts.url = opts.url[0];
-            throw 'fallback URLs not yet implemented';
+            opts.url = opts.fallbackUrls.shift();
+            // throw 'fallback URLs not yet implemented'; //TODO: test fallbackUrls
         }
         opts.fallbackUrls = [].filter.call(opts.fallbackUrls, s => !!s);
 
@@ -972,7 +984,13 @@
                 }
             },
         });
+        delete details.element;
+        delete details.imgEl;
 
+        //FIXME: VM148:9 Uncaught TypeError: Converting circular structure to JSON
+        //     --> starting at object with constructor 'HTMLImageElement'
+        //     |     property '_meta' -> object with constructor 'Object'
+        //     --- property 'imgEl' closes the circle
         GM_download(details);
     }
 
@@ -986,22 +1004,33 @@
      */
     function GM_downloadPromise(url, opts = {}) {
         var xhr = {};
+        var timeout;
         var details = $.extend({
             url: url,
             name: 'untitled.gif',
             headers: undefined,
             saveAs: false,
             timeout: undefined,
+
+            // actual callbacks (passed by user)
+            _onload: () => undefined,
+            _onerror: () => undefined,
+            _onprogress: () => undefined,
+            _ontimeout: () => undefined,
         }, opts);
+
+        // prepend all functions with _
+        for (const key of Object.keys(details)) {
+            if (typeof (details[key]) === 'function' && key[0] !== '_') {
+                details['_' + key] = details[key];
+                delete details[key];
+            }
+        }
+
         const promise = new Promise(function (resolve, reject) {
             console.debug('promise.execute()');
             details = $.extend(details, {
                 url: url,
-                // actual callbacks (passed by user)
-                _onload: () => undefined,
-                _onerror: () => undefined,
-                _onprogress: () => undefined,
-                _ontimeout: () => undefined,
 
                 // the functions that the user passes
                 onload: function (res) {
@@ -1027,11 +1056,12 @@
 
             //HACK: delay so `details` isn't passed immediately giving the promise time to be constructed
             //      (promise.onprogress().onload().onerror()....)
-            setTimeout(function () {
+            timeout = setTimeout(function () {
                 console.log('GM_download(', details, ')\n ->', promise);
                 try {
                     xhr = GM_download(details);
                 } catch (e) {
+                    console.error(e);
                     reject(e);
                 }
             }, 1);
@@ -1042,6 +1072,7 @@
 
         promise.onload = promise.then;
         promise.abort = () => {
+            clearTimeout(timeout);
             if (xhr && xhr.abort) {
                 xhr.abort();
             } else {
@@ -1061,6 +1092,12 @@
      * @returns {RequestPromise}
      */
     function GM_xmlhttpRequestPromise(url, opts = {}) {
+        if (arguments.length === 1 && typeof (url) === 'object') {
+            opts = url;
+            url = opts.url;
+        }
+
+        var timeout;
         var xhr = {};
         var details = $.extend({
             url: url,
@@ -1076,10 +1113,26 @@
             fetch: false,
             username: undefined,
             password: undefined,
+
+            /// actual callbacks (passed by user)
+            _onload: () => undefined,
+            _onerror: () => undefined,
+            _onprogress: () => undefined,
+            _ontimeout: () => undefined,
+            _onabort: () => undefined,
+            _onloadstart: () => undefined,
+            _onreadystatechange: () => undefined,
         }, opts);
 
+        // prepend all functions with _
+        for (const key of Object.keys(details)) {
+            if (typeof (details[key]) === 'function' && key[0] !== '_') {
+                details['_' + key] = details[key];
+                delete details[key];
+            }
+        }
+
         const promise = new Promise(function (resolve, reject) {
-            console.debug('promise.execute()');
             details = $.extend(details, {
                 url: url,
                 // method: 'GET',
@@ -1094,16 +1147,6 @@
                 // fetch: false,
                 // username: null,
                 // password: null,
-
-
-                /// actual callbacks (passed by user)
-                _onload: () => undefined,
-                _onerror: () => undefined,
-                _onprogress: () => undefined,
-                _ontimeout: () => undefined,
-                _onabort: () => undefined,
-                _onloadstart: () => undefined,
-                _onreadystatechange: () => undefined,
 
                 /// the functions that the user passes
                 onload: function (res) {
@@ -1137,23 +1180,25 @@
                 },
             });
 
-            setTimeout(function () {
+            timeout = setTimeout(function () {
                 console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
 
                 try {
                     xhr = GM_xmlhttpRequest(details);
                 } catch (e) {
+                    console.error(e);
                     reject(e);
                 }
 
-            }, 0);
+            }, 1);
         });
+        _bindPromiseSetters(promise, details);
 
         // those are the setters (the ones used in the chain)
-        _bindPromiseSetters(promise, details);
         // promise.onload = undefined;
         // promise.onerror = undefined;
         promise.abort = () => {
+            clearTimeout(timeout);
             if (xhr && xhr.abort) {
                 xhr.abort();
             } else {
@@ -1198,7 +1243,6 @@
                 .onreadystatechange(function (e) {
                     console.log('onreadystatechange(), readyState=', e.readyState, '\n', e);
                 })
-
 
                 .onerror(function (e) {
                     console.log('onerror()', e);
@@ -1316,7 +1360,8 @@
         return removeDoubleSpaces(tryDecodeURIComponent(str).replace(/(^site)|www(\.?)|http(s?):\/\/|proxy\.duckduckgo|&f=1|&reload=on/gi, ''));
     }
 
-    /** creates an anchor, clicks it, then removes it
+    /**
+     * creates an anchor, clicks it, then removes it
      * this is done because some actions cannot be done except in this way
      * @param {string} url
      * @param {string=} name
