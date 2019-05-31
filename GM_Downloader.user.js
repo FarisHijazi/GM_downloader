@@ -51,54 +51,35 @@
      */
     // GM_download;
 
+
     /**
-     * Response callback
-     * @callback scriptish_response_callback
-     * @param {number} responseCode
-     * @param {string} responseMessage
+     * @typedef {Promise} RequestPromise
+     * @property {Function} onload - identical to `promise.then()`
+     * @property {Function} onerror -
+     * @property {Function} onprogress -
+     * @property {Function} ontimeout -
+     * @property {Function} onabort -
+     * @property {Function} onloadstart -
+     * @property {Function} onreadystatechange -
      */
 
-
     /**
-     * https://tampermonkey.net/documentation.php#GM_xmlhttpRequest
-     *
-     * Arguments
-     * Object details
-     * A single object with properties defining the request behavior.
-     *
-     * @param {Object} details - the main details object
-     *
-     * @param {String=} details.method - Optional. The HTTP method to utilize. Currently only "GET" and "POST" are supported. Defaults to "GET".
-     * @param {String} details.url - The URL to which the request will be sent. This value may be relative to the page the user script is running on.
-     * @param {scriptish_response_callback=} [details.onload] - A function called if the request finishes successfully. Passed a Scriptish response object (see below).
-     * @param {scriptish_response_callback=} [details.onerror] - A function called if the request fails. Passed a Scriptish response object (see below).
-     * @param {scriptish_response_callback=} [details.onreadystatechange] - A function called whenever the request's readyState changes. Passed a Scriptish response object (see below).
-     * @param {String=} [details.data] - Content to send as the body of the request.
-     * @param {Object=} [details.headers] - An object containing headers to be sent as part of the request.
-     * @param {Boolean=} [details.binary] - Forces the request to send data as binary. Defaults to false.
-     * @param {Boolean=} [details.makePrivate] - Forces the request to be a private request (same as initiated from a private window). (0.1.9+)
-     * @param {Boolean=} [details.mozBackgroundRequest] - If true security dialogs will not be shown, and the request will fail. Defaults to true.
-     * @param {String=} [details.user] - The user name to use for authentication purposes. Defaults to the empty string "".
-     * @param {String=} [details.password] - The password to use for authentication purposes. Defaults to the empty string "".
-     * @param {String=} [details.overrideMimeType] - Overrides the MIME type returned by the server.
-     * @param {Boolean=} [details.ignoreCache] - Forces a request to the server, bypassing the cache. Defaults to false.
-     * @param {Boolean=} [details.ignoreRedirect] - Forces the request to ignore both temporary and permanent redirects.
-     * @param {Boolean=} [details.ignoreTempRedirect] - Forces the request to ignore only temporary redirects.
-     * @param {Boolean=} [details.ignorePermanentRedirect] - Forces the request to ignore only permanent redirects.
-     * @param {Boolean=} [details.failOnRedirect] - Forces the request to fail if a redirect occurs.
-     * @param {int=} redirectionLimit: Optional - Range allowed: 0-10. Forces the request to fail if a certain number of redirects occur.
-     * Note: A redirectionLimit of 0 is equivalent to setting failOnRedirect to true.
-     * Note: If both are set, redirectionLimit will take priority over failOnRedirect.
-     *
-     * Note: When ignore*Redirect is set and a redirect is encountered the request will still succeed, and subsequently call onload. failOnRedirect or redirectionLimit exhaustion, however, will produce an error when encountering a redirect, and subsequently call onerror.
-     *
-     * For "onprogress" only:
-     *
-     * @param {Boolean} lengthComputable: Whether it is currently possible to know the total size of the response.
-     * @param {int} loaded: The number of bytes loaded thus far.
-     * @param {int} total: The total size of the response.
-     *
-     * @return {{abort: Function}}
+     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
+     * @property {string}    url
+     * @property {string}    name
+     * @property {bool}      [rename=true]
+     * @property {string}    directory
+     * @property {string[]}  fallbackUrls - list of urls
+     * @property {Element}   element - an HTML element
+     * @property {string}    mainDirectory
+     * @property {string}    directory
+     * @property {string}    fileExtension
+     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
+     * @property {number}    attempts - Each download has a few attempts before it gives up.
+     * @property {Function}  onload
+     * @property {Function}  onerror
+     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
+     *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
      */
 
 
@@ -121,6 +102,7 @@
     }, GM_getValue('Config'));
 
     const invalidNameCharacters = '@*:"|<>\\n\\r\?\~' + '\u200f';
+    var isValidExtension = (ext) => !/com|exe/i.test(ext) && ext.length > 0 && ext.length <= 3;
 
     var debug = true;
     var fileNumber = 1;
@@ -204,6 +186,34 @@
         });
     }
 
+    /**
+     *
+     * @param responseHeaders
+     * @returns {{fileExtension: string | *, contentType: string}}
+     */
+    function getContentType(responseHeaders) {
+        const [fullMatch, mimeType1, mimeType2] = responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
+        const contentType = [mimeType1, mimeType2].join('/');
+
+        const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
+            unsafeWindow.mimeTypes[contentType].extensions[0] :
+            mimeType2;
+        return {contentType, fileExtension};
+    }
+
+    /**
+     * @param {Tampermonkey.Response} res - parses the responseHeaders from the response and adds them as fields to `res`
+     */
+    function extendResponse(res) {
+        // you'll get a match like this:    ["content-type: image/png", "image", "png"]
+        const responseHeaders = res.responseHeaders;
+        const {contentType, fileExtension} = getContentType(responseHeaders);
+
+        // adding properties
+        res.contentType = contentType;
+        res.fileExtension = fileExtension;
+    }
+
     (function extendJSZip() {
         if (typeof JSZip !== 'undefined') {
             /** The current file index being downloaded/added to the zip */
@@ -255,7 +265,7 @@
                     }
                 };
 
-                this.__ongenzipProgressCounter = 0;
+                this.__ongenzipProgressCounter = 0; //TODO: refactor: delete this
                 return this.generateIndexHtml()
                     .generateAsync({type: 'blob'}, updateCallback)
                     .then(blob => {
@@ -317,6 +327,160 @@
                     this._progressBar = setupProgressBar();
                 return this._progressBar;
             });
+
+            /**
+             * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
+             */
+            JSZip.prototype.fetchList = [];
+
+            //FIXME: fix onBadResponse
+            //TODO: make better arguments
+            /**
+             * Requests the image and adds it to the local zip
+             * @param fileUrl
+             * @param fileName
+             * @param {function=} onBadResponse function(this: zip, response): function which is passed the response in both onload and onerror
+             */
+            JSZip.prototype.requestAndZip = function (fileUrl, fileName, onBadResponse = (res, furl, fname) => null) {
+                var zip = this;
+                var fileSize = 0;
+                zip.loadedLast = 0;
+                zip.activeZipThreads++;
+                onBadResponse = onBadResponse.bind(zip); // the `this` argument will always be the zip
+
+                //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
+                fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
+
+                if (zip.file(fileName)) {
+                    console.warn('ZIP already contains the file: ', fileName);
+                    return;
+                }
+
+                const xhr = GM_xmlhttpRequestPromise({
+                    method: 'GET',
+                    url: fileUrl,
+                    responseType: 'arraybuffer',
+                    binary: true,
+                    onload: res => {
+                        if (zip.file(fileName)) {
+                            console.warn('ZIP already contains the file: ', fileName);
+                            return;
+                        }
+
+                        res && console.debug(
+                            'onload:' +
+                            '\nreadyState:', res.readyState,
+                            '\nresponseHeaders:', res.responseHeaders,
+                            '\nstatus:', res.status,
+                            '\nstatusText:', res.statusText,
+                            '\nfinalUrl:', res.finalUrl,
+                            '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
+                        );
+
+                        if (onBadResponse(res, fileUrl, fileName)) {
+                            zip.current++;
+                            return;
+                        }
+
+                        const {contentType, fileExtension} = getContentType(res.responseHeaders);
+                        const blob = new Blob([res.response], {type: contentType});
+
+                        console.log(`Adding file to zip:\n"${fileName}"\n"${fileUrl}"`, '\ncontentType:', contentType);
+
+                        zip.file(`${fileName.trim()}_${zip.current + 1}.${fileExtension}`, blob);
+                        zip.responseBlobs.add(blob);
+                        zip.current++;
+
+                        // if finished, stop
+                        if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
+                            return;
+                        }
+
+                        // Completed! TODO: move this outside, make it that when all requestAndZip()s finish
+                        if (zip.current >= zip.zipTotal - 1) {
+                            debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
+                            zip.zipTotal = -1;
+                            if (zip.progressBar) zip.progressBar.destroy();
+                            zip.genZip();
+                        }
+                        zip.activeZipThreads--;
+                    },
+                    onreadystatechange: res => {
+                        console.debug('Request state changed to: ' + res.readyState);
+                        if (res.readyState === 4) {
+                            console.debug('ret.readyState === 4');
+                        }
+                    },
+                    onerror: res => {
+                        if (onBadResponse(res, fileUrl, fileName)) {
+                            return;
+                        }
+
+                        console.error('An error occurred.',
+                            '\nreadyState: ', res.readyState,
+                            '\nresponseHeaders: ', res.responseHeaders,
+                            '\nstatus: ', res.status,
+                            '\nstatusText: ', res.statusText,
+                            '\nfinalUrl: ', res.finalUrl,
+                            '\nresponseText: ', res.responseText,
+                        );
+                        zip.activeZipThreads--;
+                    },
+                    onprogress: res => {
+
+                        // FIXME: fix abort condition, when should it abort?
+                        const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
+                        if (abortCondition && false) {
+                            if (xhr.abort) {
+                                xhr.abort();
+                                console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
+                            } else
+                                console.error('xhr.abort not defined');
+                            return;
+                        }
+
+                        if (res.lengthComputable) {
+                            if (fileSize === 0) { // happens once
+                                fileSize = res.total;
+                                zip.totalSize += fileSize;
+                            }
+                            const loadedSoFar = res.loaded;
+                            const justLoaded = loadedSoFar - zip.loadedLast;    // What has been added since the last progress call
+                            const fileprogress = loadedSoFar / res.total;   //
+
+                            zip.totalLoaded += justLoaded;
+                            const totalProgress = zip.totalLoaded / zip.totalSize;
+
+                            if (debug) console.debug(
+                                'loadedSoFar:', res.loaded,
+                                '\njustLoaded:', loadedSoFar - zip.loadedLast,
+                                '\nfileprogress:', fileprogress
+                            );
+
+                            const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
+                            if (typeof progressBar !== 'undefined' && zip.progressBar) {
+                                zip.progressBar.set(totalProgress);
+                                zip.progressBar.setText(progressText);
+                            } else {
+                                var progressbarContainer;
+                                if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
+                                    progressbarContainer.innerText = progressText;
+                                }
+                            }
+
+                            zip.loadedLast = loadedSoFar;
+                        }
+                    },
+                });
+
+                zip.fetchList.push(xhr);
+
+                //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
+                return xhr;
+            };
+
+            //
+
         } else {
             console.warn('downloader_script: JSZip is undefined in downloader script, if you\'re using this script via @require, be sure to also include its dependencies (check script @require).' +
                 '\nMost likely missing:', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.4/jszip.min.js');
@@ -336,16 +500,6 @@
         return GM_setValue('downloadHistory', Array.from(new Set(mergedDlH)));
     }
 
-    /**
-     url - the URL from where the data should be downloaded
-     name - the filename - for security reasons the file extension needs to be whitelisted at the Tampermonkey options page
-     headers - see GM_xmlhttpRequest for more details
-     saveAs - boolean value, show a saveAs dialog
-     onerror callback to be executed if the download ended up with an error
-     onload callback to be executed if the download finished
-     onprogress callback to be executed if the download made some progress
-     ontimeout callback to be executed if the download failed due to a timeout
-     */
     function setNameFilesByNumber(newValue) {
         Config.NAME_FILES_BY_NUMBER = newValue;
         GM_getValue('NAME_FILES_BY_NUMBER', Config.NAME_FILES_BY_NUMBER);
@@ -361,10 +515,15 @@
     }
 
     /**
-     * adds chain-able function setters to a promise
-     * given a promise and a details object (any options parameter object)
+     * Adds chain-able function setters to a promise
+     * given a `promise` and a `details` object (any options parameter object)
      *
-     * allows for
+     * Renames all the function type objects in `details` to by prepending '_' to them,
+     * while the original functions will now become the setters.
+     *
+     * @param {Promise} promise
+     * @param {Object} details - this gets mutated
+     *
      *
      * @example
      *  details = { onload: function (e) { } }
@@ -381,8 +540,7 @@
      *      ...
      *  });
      *
-     * @param {Promise} promise
-     * @param {Object} details
+     * @private
      */
     function _bindPromiseSetters(promise, details) {
         for (const key of Object.keys(details)) {
@@ -414,7 +572,7 @@
      * @returns {Object}
      */
     //FIXME: big mess, sort out what variables are needed and what aren't, and what o should contain
-    function download_raw(o) {
+    function download2(o) {
         // to the actual downloading part
         // FIXME: to we even need fileUrl and finalName? are they gonna change? aren't they the same as details.name and details.url?
         /**
@@ -424,7 +582,7 @@
         var promise = {};
 
         /**
-         * keep in mind that the details object is specific to a single download_raw() function call, do NOT pass details to another download_raw(details) function
+         * keep in mind that the details object is specific to a single download2() function call, do NOT pass details to another download2(details) function
          * details is to be passed to the GM_download and xmlhttpRequest() only.
          * changing names and urls is to be done with the options objectc o
          * @type {{headers: {}, onerrorFinal: onerrorFinal, onerror: onerror, saveAs: boolean, onloadFinal: onloadFinal, name: (*|string), onprogress: onprogress, url: *, ontimeout: ontimeout, onload: onload}}
@@ -453,7 +611,7 @@
                                 case 'network_failed':
                                     // retry as if that didn't even happen
                                     o.attempts = Config.defaultDownloadAttempts;
-                                    download_raw(o);
+                                    download2(o);
                                     break;
                                 case 'not_whitelisted':
                                     download(
@@ -594,28 +752,10 @@
         return promise;
     }
 
-    /**
-     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
-     * @property {string}    url
-     * @property {string}    name
-     * @property {bool}      [rename=true]
-     * @property {string}    directory
-     * @property {string[]}  fallbackUrls - list of urls
-     * @property {Element}   element - an HTML element
-     * @property {string}    mainDirectory
-     * @property {string}    directory
-     * @property {string}    fileExtension
-     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
-     * @property {number}    attempts - Each download has a few attempts before it gives up.
-     * @property {Function}  onload
-     * @property {Function}  onerror
-     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
-     *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
-     */
 
     //TODO: add support for passing url patterns
     /**
-     * @param {(string|Element|downloadOptions)} fileUrl the url to the file to download
+     * @param {(downloadOptions|string|Element)} fileUrl the url to the file to download
      * @param {string=} fileName - gets extracted by default
      * @param {(downloadOptions|Object)=} opts - options, note, this is always the last argument
      *      so if only one parameter is passed, it will be considered the options object
@@ -742,7 +882,7 @@
         // remove all extra extensions (don't remove it if there isn't a fileExtension)
         if (fileExtension) opts.name = opts.name.replace(RegExp('\.' + fileExtension, 'gi'), '');
 
-        debug && console.log(
+        console.debug(
             'fileUrl:', opts.url,
             '\ndownloadDirectory:', opts.directory,
             '\nextension:', fileExtension,
@@ -751,7 +891,7 @@
         );
 
         // TODO: maybe the function should just stop here, maybe it should just be for renaming/building the opts
-        //  this is the point where we just call download_raw or something..
+        //  this is the point where we just call download2 or something..
 
 
         // extending defaults (to prevent null function issues)
@@ -916,33 +1056,8 @@
     }
 
     /**
-     * @typedef {Promise} RequestPromise
-     * @property {Function} onload - identical to `promise.then()`
-     * @property {Function} onerror -
-     * @property {Function} onprogress -
-     * @property {Function} ontimeout -
-     * @property {Function} onabort -
-     * @property {Function} onloadstart -
-     * @property {Function} onreadystatechange -
-     */
-
-    /**
-     * TODO: complete docs
-     * @param {string} url
-     * @param {Object} opts
-     * @param {(*|string)=} opts.url - same as url, the first one is stronger
-     * @param {string='GET'} opts.method - 'GET' or 'POST'
-     * @param {(*)=} opts.headers -
-     * @param {(*)=} opts.data -
-     * @param {boolean=false} opts.binary -
-     * @param {number=} opts.timeout -
-     * @param {Object=} opts.context -
-     * @param {(*)=} opts.responseType -
-     * @param {string=} opts.overrideMimeType -
-     * @param {string=false} opts.anonymous -
-     * @param {boolean=false} opts.fetch -
-     * @param {(*|string)=} opts.username -
-     * @param {(*|string)=} opts.password -
+     * @param {(string|Tampermonkey.Request|Object)} url
+     * @param {(Tampermonkey.Request|Object)=} opts
      * @returns {RequestPromise}
      */
     function GM_xmlhttpRequestPromise(url, opts = {}) {
@@ -1178,9 +1293,14 @@
         return fileName;
     }
     function getFileExtension(fileUrl) {
-        const ext = clearUrlGibberish((String(fileUrl)).split(/[.]/).pop()) //the string after the last '.'
-            .replace(/[^a-zA-Z0-9].+($|\?)/gi, '') // replace everything that is non-alpha, numeric nor a '.'
+        var ext = clearUrlGibberish((String(fileUrl)).split(/[.]/).pop()) //the string after the last '.'
+            .replace(/[^a-zA-Z0-9.]+($|\?)/gi, '') // replace everything that is non-alpha, numeric nor '.'
             .replace(/[^\w]/gi, '');
+
+        if (!isValidExtension(ext)) {
+            ext = 'oops.gif';
+        }
+
         return !ext ? 'oops' : ext;
     }
 
@@ -1236,6 +1356,49 @@
         return dialogText;
     }
 
+    /**
+     * @param {(Object[]|Downloadable[])=} fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
+     *  if empty, will use images matching this selector by default: "img.img-big"
+     *
+     * @param {string=} zipName
+     * @return {JSZip}
+     */
+    function zipFiles(fileUrls, zipName = '') {
+        const zip = new JSZip();
+
+        pendingZips.add(zip);
+        zip.zipName = (zipName ? zipName : document.title).replace(/\//g, ' ');
+        var pb = zip.progressBar; // init progressBar
+        zip.fetchList = [];
+
+        const files = Array.from(fileUrls || document.querySelectorAll('img.img-big'))
+            .map(normalizeFile)
+            .filter(file => !!file && file.url);
+
+        zip.zipTotal = files.length;
+
+        window.addEventListener('beforeunload', zipBeforeUnload);
+        console.log('zipping files:', files);
+
+        // give access to the zip variable by adding it to the global object
+        console.log(
+            `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
+        );
+        unsafeWindow.zips.push(zip);
+
+
+        for (const file of files)
+            try {
+                zip.requestAndZip(file.url, file.name);
+            } catch (r) {
+                console.error(r);
+            }
+
+        //TODO: this should return a promise of when all the files have been zipped,
+        //          this can be done using Promise.all(zip.fetchList)
+        return zip;
+    }
+
     //FIXME: this is basically zipFiles with custom error handlers, just extend zipFiles to allow for fallback urls
     /**
      * @deprecated
@@ -1261,232 +1424,58 @@
                 );
 
                 // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-                const [fullMatch, mimeType1, mimeType2] = res.responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-                const contentType = [mimeType1, mimeType2].join('/');
+                const {contentType, fileExtension} = getContentType(res.responseHeaders);
+                const blob = new Blob([res.response], {type: contentType});
+
                 if (/(<!DOCTYPE)|(<html)/.test(res.responseText) || !/image/i.test(mimeType1)) {
                     console.error('Not image data!', res.responseText);
                     return false;
                 }
-                //FIXME: you can't call this here
+
                 //TODO: make it possible to enqueue more files to a zip that's already working
-                requestAndZipFile(ddgProxy(fileUrl), fileName);
+                this.requestAndZip(ddgProxy(fileUrl), fileName);
             } else { // if is a proxy url and it failed, just give up
                 return true;
             }
         });
     }
+
+
+    //TODO: create type: Downloadable or DFile (download file)
     /**
+     * extract name and url from
      *
-     * @param fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
-     *  if empty, will use images matching this selector by default: "img.img-big"
-     *
-     *   file.fileURL = file.fileURL || file.fileUrl || file.url || file.src || file.href;
-     *   file.fileName = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
-     * @param zipName
-     * @return {JSZip}
+     *   file.url = file.fileURL || file.fileUrl || file.url || file.src || file.href;
+     *   file.name = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
+     * @param {Object|string} file
+     * @returns {Downloadable}
      */
-    function zipFiles(fileUrls, zipName = '') {
-        const zip = new JSZip();
-        zip.zipName = (zipName ? zipName : document.title).replace(/\//g, ' ');
-        var pb = zip.progressBar; // init progressBar
-        zip.xhrList = [];
+    function normalizeFile(file) {
+        if (!file) return {};
+        if (typeof file === 'string') { // if string
+            //TODO: name is never specified here
+            const url = file;
+            return ({
+                url: url,
+                name: nameFile(url) || 'untitled.unkownformat.gif'
+            });
+        }
 
-        /**
-         * extract name and url from
-         * @param {Object|string} file
-         * @returns {({fileURL, fileName})}
-         */
-        const normalizeFile = file => {
-            if (!file) return;
-            if (typeof file === 'string') { // if string
-                //TODO: name is never specified here
-                return {
-                    fileURL: file,
-                    fileName: nameFile(file) || 'untitled.unkownformat.gif'
-                };
-            }
-
-            function getFirstProperty(o, properties) {
+        function getFirstProperty(o, properties) {
                 if (!o) return null;
                 for (const p of properties) {
                     if (o[p])
                         return o[p];
-                }
             }
-
-            return {
-                fileURL: getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']),
-                fileName: getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.fileURL) || 'Untitled',
-            };
-        };
-
-        const files = Array.from(fileUrls ? fileUrls : document.querySelectorAll('img.img-big'))
-            .map(normalizeFile)
-            .filter(file => !!file);
-        zip.zipTotal = files.length;
-
-        window.addEventListener('beforeunload', zipBeforeUnload);
-        console.log('zipping files:', files);
-
-        for (const file of files)
-            try {
-                const xhr = requestAndZipFile(file.fileURL, file.fileName);
-                zip.xhrList.push(xhr);
-            } catch (r) {
-                console.error(r);
-            }
-
-
-        /**
-         * Requests the image and adds it to the local zip
-         * @param fileUrl
-         * @param fileName
-         * @param onBadResponse function(response): a function which is passed the response in both onload and onerror
-         */
-        function requestAndZipFile(fileUrl, fileName, onBadResponse = () => null) {
-            var fileSize = 0;
-            zip.loadedLast = 0;
-            zip.activeZipThreads++;
-
-            fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
-
-            var xhr;
-
-            xhr = GM_xmlhttpRequest({
-                method: 'GET',
-                url: fileUrl,
-                responseType: 'arraybuffer',
-                binary: true,
-                onload: function (res) {
-                    if (zip.file(fileName)) {
-                        console.warn('ZIP already contains the file: ', fileName);
-                        return;
-                    }
-
-                    res && console.debug(
-                        'onload:' +
-                        '\nreadyState:', res.readyState,
-                        '\nresponseHeaders:', res.responseHeaders,
-                        '\nstatus:', res.status,
-                        '\nstatusText:', res.statusText,
-                        '\nfinalUrl:', res.finalUrl,
-                        '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
-                    );
-
-                    if (onBadResponse(res, fileUrl)) {
-                        zip.current++;
-                        return;
-                    }
-                    // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-                    const [fullMatch, mimeType1, mimeType2] = res.responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-                    const contentType = [mimeType1, mimeType2].join('/');
-                    const blob = new Blob([res.response], {type: contentType});
-                    const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
-                        unsafeWindow.mimeTypes[contentType].extensions[0] :
-                        mimeType2;
-
-                    console.debug('contentType:', contentType);
-                    zip.file(`${fileName.trim()}_${zip.current + 1}.${fileExtension}`, blob);
-                    console.log('Added file to zip:', fileName, fileUrl);
-                    zip.responseBlobs.add(blob);
-                    zip.current++;
-
-                    // if finished, stop
-                    if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
-                        return;
-                    }
-
-                    // Completed!
-                    if (zip.current >= zip.zipTotal - 1) {
-                        console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
-                        zip.zipTotal = -1;
-                        if (zip.progressBar)
-                            zip.progressBar.destroy();
-                        zip.genZip();
-                    }
-                    zip.activeZipThreads--;
-                },
-                onreadystatechange: function (res) {
-                    console.debug('Request state changed to: ' + res.readyState);
-                    if (res.readyState === 4) {
-                        console.debug('ret.readyState === 4');
-                    }
-                },
-                onerror: function (res) {
-                    if (onBadResponse(res, fileUrl)) {
-                        return;
-                    }
-
-                    console.error('An error occurred.',
-                        '\nreadyState: ', res.readyState,
-                        '\nresponseHeaders: ', res.responseHeaders,
-                        '\nstatus: ', res.status,
-                        '\nstatusText: ', res.statusText,
-                        '\nfinalUrl: ', res.finalUrl,
-                        '\nresponseText: ', res.responseText,
-                    );
-                    zip.activeZipThreads--;
-                },
-                onprogress: function (res) {
-
-                    // FIXME: fix abort condition, when should it abort?
-                    const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
-                    if (abortCondition && false) {
-                        if (xhr.abort) {
-                            xhr.abort();
-                            console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
-                        } else
-                            console.error('xhr.abort not defined');
-                        return;
-                    }
-
-                    if (res.lengthComputable) {
-                        if (fileSize === 0) { // happens once
-                            fileSize = res.total;
-                            zip.totalSize += fileSize;
-                        }
-                        const loadedSoFar = res.loaded;
-                        const justLoaded = loadedSoFar - zip.loadedLast;    // What has been added since the last progress call
-                        const fileprogress = loadedSoFar / res.total;   //
-
-                        zip.totalLoaded += justLoaded;
-                        const totalProgress = zip.totalLoaded / zip.totalSize;
-
-                        console.debug(
-                            'loadedSoFar:', res.loaded,
-                            '\njustLoaded:', loadedSoFar - zip.loadedLast,
-                            '\nfileprogress:', fileprogress
-                        );
-
-                        const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
-                        if (typeof progressBar !== 'undefined' && zip.progressBar) {
-                            zip.progressBar.set(totalProgress);
-                            zip.progressBar.setText(progressText);
-                        } else {
-                            var progressbarContainer;
-                            if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
-                                progressbarContainer.innerText = progressText;
-                            }
-                        }
-
-                        zip.loadedLast = loadedSoFar;
-                    }
-                }
-            });
-            //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
-            return xhr;
         }
 
-        // give access to the zip variable by adding it to the global object
-        console.log(
-            `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
-        );
-        unsafeWindow.zips.push(zip);
+        const dFile = {};
+        dFile.url = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
+        dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
 
-        //TODO: this should return a promise of when all the files have been zipped,
-        //          this can be done using Promise.all(zip.xhrList)
-        return zip;
+        return dFile;
     }
+
 
     function setupProgressBar() {
         const pbHeader = createElement(`<header id="progressbar-container"/>`);
