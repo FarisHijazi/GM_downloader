@@ -154,7 +154,7 @@
 
     /** mimeTypeJSON contains the mimeType to file extension database, useful for getting the extension from the mimetype */
     if (!(typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0)) {
-        fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
+        GM_fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
             method: 'GET', // *GET, POST, PUT, DELETE, etc.
             mode: 'cors', // no-cors, cors, *same-origin
             cache: 'force-cache', // *default, no-cache, reload, force-cache, only-if-cached
@@ -166,7 +166,8 @@
             redirect: 'follow', // manual, *follow, error
             referrer: 'no-referrer', // no-referrer, *client
             body: null, // body data type must match "Content-Type" header
-        }).then(res => res.json()).then(json => {
+        }).then(res => {
+            const json = JSON.parse(res.responseText);
             if (typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0) {
                 debug && console.debug('unsafeWindow already contains unsafeWindow.mimeTypes, no need to load another one');
                 return;
