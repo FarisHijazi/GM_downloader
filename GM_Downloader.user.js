@@ -383,6 +383,7 @@
                 return this._progressBar;
             });
 
+            //TODO: this should contain all the info related to the file and its request
             /**
              * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
              */
@@ -790,15 +791,16 @@
             },
             onerrorFinal: function (rr) { //  default is to try
                 GM_download({
-                    name: name + '.' + getFileExtension(o.url),
+                    name: o.name + '.' + getFileExtension(o.url),
                     url: o.url,
                     onload: details.onload(rr),
                     onerror: function (rrr) {
                         console.warn('Download failed:', o.url, rrr);
+                        saveByAnchor(o.url, o.name + '.' + getFileExtension(o.url));
                     }
                 });
                 downloadedSet.delete(o.url); // upon failure, remove the url from the list to give it another chance.
-                console.error('Download failed, onerrorFinal():', name, o.url, rr);
+                console.error('Download failed, onerrorFinal():', o.name, o.url, rr);
             },
         };
 
@@ -950,16 +952,17 @@
             opts.directory += '/';
 
         // == file extension
-        let fileExtension = opts.fileExtension || getFileExtension(opts.url);
+        opts.fileExtension = opts.fileExtension || getFileExtension(opts.url);
         // remove all extra extensions (don't remove it if there isn't a fileExtension)
-        if (fileExtension) opts.name = opts.name.replace(RegExp('\.' + fileExtension, 'gi'), '');
+        if (opts.fileExtension) opts.name = opts.name.replace(RegExp('\.' + opts.fileExtension, 'gi'), '');
 
         console.debug(
-            'fileUrl:', opts.url,
+            'final download() args:',
+            '\nfileUrl:', opts.url,
             '\ndownloadDirectory:', opts.directory,
-            '\nextension:', fileExtension,
-            '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
-            '\nopts:', opts,
+            '\nextension:', opts.fileExtension,
+            '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + opts.fileExtension),
+            '\n\nopts:', opts,
         );
 
         // TODO: maybe the function should just stop here, maybe it should just be for renaming/building the opts
@@ -990,14 +993,14 @@
 
         // force these functions to be passed
         details = $.extend(details, {
-            name: removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
+            name: removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + opts.fileExtension),
             onload: function onload(e) {
                 console.log('Download finished', opts.name, '\n' + opts.url, e);
                 downloadedSet.add(opts.url);
                 if (typeof (opts.onload) === 'function')
                     opts.onload(e);
             },
-            onerror: function (r) {
+            onerror: function (r = {error: '', details: {current: ''}}) {
                 //EXP: note: this needs to be changed to onerrorfinal once onerrorfinal is implemented
                 if (opts.attempts === 1) // this is the last attempt
                     if (typeof (opts.onerror) === 'function')
@@ -1009,16 +1012,13 @@
                     '\nError:', r,
                     '\nDetails:', r.details
                 );
-                switch (r.error.toLowerCase()) {
+                switch (r.error) {
                     case 'not_succeeded':
                         switch (r.details.current.toLowerCase()) {
                             case 'not_whitelisted':
                                 opts.url = opts.url.replace(/\?.*/, '');
-                                opts.name = opts.name.substring(0,
-                                    (opts.name.lastIndexOf('?') > -1) ?
-                                        opts.name.lastIndexOf('?') :
-                                        (opts.name.length + '.oops.jpg')
-                                );
+                                const idx = opts.name.lastIndexOf('?');
+                                opts.name = opts.name.substring(0, idx > -1 ? idx : (opts.name.length + '.oops.jpg'));
                                 download(opts);
                                 break;
                             case 'user_canceled':
