@@ -559,7 +559,7 @@
 
 
     /** if there's a **special** hostname url (like gify.com), the big url can be extracted */
-    function extractFullUrlForSpecialHostnames(fileUrl) {
+    function tryToGetBigImageUrl(fileUrl) {
         try {
             const url = new URL(fileUrl);
             if (url.hostname.indexOf('gfycat.com') === 0) {
@@ -908,7 +908,7 @@
         if (!opts.url) throw 'Input URL is null';
 
         //
-        opts.url = extractFullUrlForSpecialHostnames(String(opts.url).replace(/["]/gi, ''));
+        opts.url = tryToGetBigImageUrl(String(opts.url).replace(/["]/gi, ''));
 
         if (/^data:/.test(opts.url) && !Config.ALLOW_BASE64_IMAGE_DOWNLOADS) {
             console.error('The source is a base64-type, download was prevented:', opts.url);
@@ -1561,7 +1561,7 @@
             //TODO: name is never specified here
             const url = file;
             return ({
-                url: extractFullUrlForSpecialHostnames(url),
+                url: tryToGetBigImageUrl(url),
                 name: nameFile(url) || 'untitled.unkownformat.gif'
             });
         }
@@ -1577,7 +1577,7 @@
         const dFile = {};
         var url = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
 
-        dFile.url = extractFullUrlForSpecialHostnames(url);
+        dFile.url = tryToGetBigImageUrl(url);
         dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
 
         return dFile;
