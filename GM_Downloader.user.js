@@ -866,7 +866,7 @@
 
         // check if there are enough attempts remaining
         if (typeof opts.attempts === 'number') {
-            if (opts.attempts > 0 || opts.fallbackUrls && opts.fallbackUrls.length) {
+            if (opts.attempts > 0) {
                 opts.attempts--;
             } else {
                 console.debug('download(): ran out of attempts');
@@ -1039,7 +1039,11 @@
                     case 'not_supported':
                         break;
                     default:
-                        opts.attempts = 1;
+                        console.warn('unknown error code:', r);
+                        if (opts.fallbackUrls.length)
+                            opts.url = opts.fallbackUrls.shift();
+                        else
+                            opts.attempts = 1;
                         download(opts);
                 }
             },
