@@ -1147,7 +1147,7 @@
         };
 
 
-        return promise;
+        return promise.catch(e => console.error(e));
     }
 
     /**
@@ -1272,7 +1272,7 @@
             }
         };
 
-        return promise;
+        return promise.catch(e => console.error(e));
     }
 
     try {
