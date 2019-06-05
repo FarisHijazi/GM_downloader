@@ -1571,42 +1571,63 @@
 
 
     function setupProgressBar() {
-        const pbHeader = createElement(`<header id="progressbar-container"/>`);
-        if (!document.querySelector('#progressbar-container')) {
-            document.body.firstElementChild.before(pbHeader);
-        }
-
-        // noinspection JSUnresolvedVariable
-        if (typeof (ProgressBar) == 'undefined') {
-            console.error('ProgressBar.js is not defined.');
-            return;
-        }
-
-        // noinspection JSUnresolvedVariable
-        var progressBar = new ProgressBar.Line('#progressbar-container', {
-            easing: 'easeInOut',
-            color: '#FCB03C',
-            strokeWidth: 1,
-            trailWidth: 1,
-            text: {
-                value: '0'
-            }
+        const container = document.createElement('div');
+        const $container = $(container).attr({
+            'id': 'progressbar-container'
+        }).addClass('progressbar-container').css({
+            'position': 'fixed',
+            'top': '0',
+            'left': '0',
+            'width': '100%',
+            // 'height': '100%',
+            'min-height': '30px',
+            'padding': '10px 0',
+            'background-color': '#36465d',
+            'box-shadow': '0 0 0 1px hsla(0,0%,100%,.13)',
+            'z-index': '999999999'
         });
 
-        pbHeader.style.position = 'fixed';
-        pbHeader.style.top = '0';
-        pbHeader.style.left = '0';
-        pbHeader.style.width = '100%';
-        pbHeader.style['min-height'] = '30px';
-        pbHeader.style.padding = '10px 0';
-        pbHeader.style['background-color'] = '#36465d';
-        pbHeader.style['box-shadow'] = '0 0 0 1px hsla(0,0%,100%,.13)';
-        pbHeader.style['z-index'] = '100';
+        document.body.firstElementChild.before(container);
+
+        if (typeof (ProgressBar) === 'undefined') {
+            console.error('ProgressBar.js is not defined.');
+            return {};
+        }
+
+        // noinspection JSUnresolvedVariable
+        const progressBar = new ProgressBar.Line(container, {
+            strokeWidth: 4,
+            easing: 'easeInOut',
+            duration: 1400,
+            color: '#FCB03C',
+            trailColor: '#eee',
+            trailWidth: 1,
+            svgStyle: {width: '100%', height: '100%'},
+            text: {
+                value: '0',
+                style: {
+                    // color: '#999',// Default: same as stroke color (options.color)
+                    display: 'inline',
+                    position: 'relative',
+                    right: '0',
+                    top: '30px',
+                    padding: 0,
+                    margin: 0,
+                    transform: null
+                },
+                alignToBottom: false,
+                autoStyleContainer: false,
+            },
+            from: {color: '#FFEA82'},
+            to: {color: '#ED6A5A'},
+            step: (state, bar) => {
+                // bar.setText(Math.round(bar.value() * 100) + ' %');
+            },
+        });
+        console.log('progressBar:', progressBar);
 
         progressBar.set(0);
-        const progressbarText = document.querySelector('.progressbar-text');
-        progressbarText.style.display = 'inline';
-        progressbarText.style.position = 'relative';
+
         return progressBar;
     }
 
