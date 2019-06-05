@@ -560,8 +560,20 @@
 
     /** if there's a **special** hostname url (like gify.com), the big url can be extracted */
     function extractFullUrlForSpecialHostnames(fileUrl) {
-        if (new URL(fileUrl).hostname.indexOf('gfycat.com') === 0) {
-            fileUrl = fileUrl.replace(/gfycat\.com/i, 'giant.gfycat.com') + '.webm';
+        try {
+            const url = new URL(fileUrl);
+            if (url.hostname.indexOf('gfycat.com') === 0) {
+                url.hostname = 'giant.gfycat.com';
+                url.pathname += '.webm';
+                return url.toString()
+            } else
+            // "https://pbs.twimg.com/media/"
+            if (/pbs\.twimg\.com/.test(url.hostname) && /^\/media/.test(url.pathname)) {
+                url.searchParams.set('format', 'jpg');
+                url.searchParams.set('name', 'orig');
+                return url.toString()
+            }
+        } catch (e) {
         }
         return fileUrl;
     }
@@ -1549,7 +1561,7 @@
             //TODO: name is never specified here
             const url = file;
             return ({
-                url: url,
+                url: extractFullUrlForSpecialHostnames(url),
                 name: nameFile(url) || 'untitled.unkownformat.gif'
             });
         }
@@ -1563,7 +1575,9 @@
         }
 
         const dFile = {};
-        dFile.url = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
+        var url = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
+
+        dFile.url = extractFullUrlForSpecialHostnames(url);
         dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
 
         return dFile;
