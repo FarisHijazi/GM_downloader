@@ -236,11 +236,12 @@
                         /**{url, name, page}*/
                         const data = JSON.parse(file.comment ? file.comment : '{}');
 
-                        html += '<div> <a href="' + data.url || file.name + '">' +
+                        //TODO: replace this with using the element API, using raw strings causes issues
+                        html += '<div> <a href="' + (data.url || file.name) + '">' +
                             '<img src="' + file.name + '" alt="' + key + '"> </a>' +
                             '<div>' +
                             '<a href="' + data.page + '" target="_blank">' + file.name + ' </a> <h4>' + file.name + ' </h4> ' +
-                            '<h3>' + data.name || file.name + '</h3> ' +
+                            '<h3>' + (data.name || file.name) + '</h3> ' +
                             '</div>' +
                             '</div>';
                     } catch (e) {
@@ -250,54 +251,103 @@
                 return this.file('index.html', new Blob([html], {type: 'text/plain'}));
             };
             JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
-            JSZip.prototype.zipName = '';
+            JSZip.prototype.name = '';
+            JSZip.prototype.__defineGetter__('pathname', function () {
+                return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
+            });
+
             /**called when the zip is generated*/
             // TODO: maybe use an EventEmitter instead of setting a single function
             JSZip.prototype.onGenZip = function () {
                 console.log('onGenZip()', this);
             };
-            JSZip.prototype.genZip = function genZip(updateCallback = null) {
 
-                if (!updateCallback) updateCallback = metadata => {
-                    if (++this.__ongenzipProgressCounter % 50 === 0) {
+            JSZip.prototype.genZip = function genZip(updateCallback = null) {
+                const zip = this;
+
+                zip.__ongenzipProgressCounter = 0; //TODO: refactor: delete zip
+
+                var genzipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
+                    strokeWidth: 4,
+                    easing: 'easeInOut',
+                    duration: 1400,
+                    color: '#FCB03C',
+                    trailColor: '#eee',
+                    trailWidth: 1,
+                    svgStyle: {
+                        // width: '100%',
+                        height: '100px',
+                    },
+                    text: {
+                        value: '0',
+                        style: {
+                            // Text color.
+                            // Default: same as stroke color (options.color)
+                            color: '#999',
+                            position: 'absolute',
+                            right: '0',
+                            top: '30px',
+                            padding: 0,
+                            margin: 0,
+                            transform: null
+                        },
+                        alignToBottom: false,
+                        autoStyleContainer: false,
+                    },
+                    from: {color: '#FFEA82'},
+                    to: {color: '#ED6A5A'},
+                    step: (state, bar) => {
+                        bar.setText(Math.round(bar.value() * 100) + ' %');
+                    },
+                });
+
+                const _updateCallback = function (metadata) {
+                    genzipProgressBar.animate(metadata.percent);
+
+                    if (++zip.__ongenzipProgressCounter % 50 === 0) {
                         console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
                         if (metadata.currentFile) {
                             console.log('current file = ' + metadata.currentFile);
                         }
                     }
+
+                    if (typeof (updateCallback) === 'function')
+                        updateCallback.call(zip, metadata);
                 };
 
-                this.__ongenzipProgressCounter = 0; //TODO: refactor: delete this
-                return this.generateIndexHtml()
-                    .generateAsync({type: 'blob'}, updateCallback)
+
+                return zip.generateIndexHtml()
+                    .generateAsync({type: 'blob'}, _updateCallback)
                     .then(blob => {
                         const objectUrl = URL.createObjectURL(blob);
-                        console.debug('zip objectUrl', objectUrl);
+                        console.debug('zip objectUrl\n' + objectUrl);
 
-                        //TODO: replace this with GM_downloadPromise and return that
-                        const name = this.zipName.replace('$name$', this.zipName || document.title);
-                        GM_download({
-                            url: objectUrl,
-                            name: `${Config.MAIN_DIRECTORY}${name} [${Object.keys(this.files).length}].zip`,
-                            onload: function () {
-                                this.onDownload && this.onDownload();
-                            },
-                            onerror: function (e) {
-                                console.warn('couldn\'t download zip', this, e);
-                                saveByAnchor(objectUrl, name + '.zip');
-                            }
-                        });
-                        this.isZipGenerated = true;
+                        zip.name = zip.name.replace('$name$', document.title);
+                        zip.isZipGenerated = true;
 
-                        this.onGenZip && this.onGenZip();
+                        zip.onGenZip && zip.onGenZip();
 
                         // remove from pendingZips set
-                        var result = pendingZips.delete(this);
+                        const result = pendingZips.delete(zip);
                         if (result === false) {
                             console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
                         }
+
+                        return GM_download({
+                            url: objectUrl,
+                            name: zip.pathname,
+                            onload: function (e) {
+                                zip.onDownload && zip.onDownload();
+                                genzipProgressBar && genzipProgressBar.destroy();
+                            },
+                            onerror: function (e) {
+                                console.warn('couldn\'t download zip', zip, e);
+                                saveByAnchor(objectUrl, zip.pathname);
+                            }
+                        });
                     });
             };
+
             /**
              * @param fname:    the desired file name
              * @returns the first iterated filename valid for the current zip (iterated: with a number added to its end).
@@ -326,7 +376,6 @@
             JSZip.prototype.totalSize = 0;
             JSZip.prototype.totalLoaded = 0;
             JSZip.prototype.responseBlobs = new Set();
-            JSZip.prototype.zipName = document.title;
             /** @type {ProgressBar} */
             JSZip.prototype.__defineGetter__('progressBar', function () {
                 if (!this._progressBar)
@@ -339,20 +388,20 @@
              */
             JSZip.prototype.fetchList = [];
 
-            //FIXME: fix onBadResponse
+            //FIXME: fix checkResponse
             //TODO: make better arguments
             /**
              * Requests the image and adds it to the local zip
              * @param fileUrl
              * @param fileName
-             * @param {function=} onBadResponse function(this: zip, response): function which is passed the response in both onload and onerror
+             * @param {function=} checkResponse function(this: zip, response): function which is passed the response in both onload and onerror
              */
-            JSZip.prototype.requestAndZip = function (fileUrl, fileName, onBadResponse = (res, furl, fname) => null) {
+            JSZip.prototype.requestAndZip = function (fileUrl, fileName, checkResponse = (res, furl, fname) => null) {
                 var zip = this;
                 var fileSize = 0;
                 zip.loadedLast = 0;
                 zip.activeZipThreads++;
-                onBadResponse = onBadResponse.bind(zip); // the `this` argument will always be the zip
+                checkResponse = checkResponse.bind(zip); // the `this` argument will always be the zip
 
                 //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
                 fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
@@ -383,7 +432,7 @@
                             '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
                         );
 
-                        if (onBadResponse(res, fileUrl, fileName)) {
+                        if (checkResponse(res, fileUrl, fileName)) {
                             zip.current++;
                             return;
                         }
@@ -418,7 +467,7 @@
                         }
                     },
                     onerror: res => {
-                        if (onBadResponse(res, fileUrl, fileName)) {
+                        if (checkResponse(res, fileUrl, fileName)) {
                             return;
                         }
 
@@ -464,14 +513,11 @@
                             );
 
                             const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
-                            if (typeof progressBar !== 'undefined' && zip.progressBar) {
+                            if (zip.progressBar) {
                                 zip.progressBar.set(totalProgress);
                                 zip.progressBar.setText(progressText);
                             } else {
-                                var progressbarContainer;
-                                if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
-                                    progressbarContainer.innerText = progressText;
-                                }
+                                $('#progressbar-container').text(progressText);
                             }
 
                             zip.loadedLast = loadedSoFar;
@@ -1414,7 +1460,7 @@
         const zip = new JSZip();
 
         pendingZips.add(zip);
-        zip.zipName = (zipName ? zipName : document.title).replace(/\//g, ' ');
+        zip.name = (zipName ? zipName : document.title).replace(/\//g, ' ');
         var pb = zip.progressBar; // init progressBar
         zip.fetchList = [];
 
