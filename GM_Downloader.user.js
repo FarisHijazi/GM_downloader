@@ -102,7 +102,7 @@
     }, GM_getValue('Config'));
 
     const invalidNameCharacters = '@*:"|<>\\n\\r\?\~' + '\u200f';
-    var isValidExtension = (ext) => !/com|exe/i.test(ext) && ext.length > 0 && ext.length <= 3;
+    var isValidExtension = ext => typeof (ext) === 'string' && !/com|exe/i.test(ext) && ext.length > 0 && ext.length <= 3;
 
     var debug = true;
     var fileNumber = 1;
@@ -141,6 +141,7 @@
             return fakeLink.href;
         }
     })();
+
     /**
      * zips that have been initiated but have not yet been generated
      * @type {Set<any>}
@@ -1345,7 +1346,7 @@
             ext = 'oops.gif';
         }
 
-        return !ext ? 'oops' : ext;
+        return ext;
     }
 
     function cleanFileName(fileName, isDirectory = false) {
