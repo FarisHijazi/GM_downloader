@@ -188,39 +188,16 @@
         });
     }
 
-    /**
-     *
-     * @param responseHeaders
-     * @returns {{fileExtension: string | *, contentType: string}}
-     */
-    function getContentType(responseHeaders) {
-        const [fullMatch, mimeType1, mimeType2] = responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-        const contentType = [mimeType1, mimeType2].join('/');
-
-        const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
-            unsafeWindow.mimeTypes[contentType].extensions[0] :
-            mimeType2;
-        return {contentType, fileExtension};
-    }
-
-    /**
-     * @param {Tampermonkey.Response} res - parses the responseHeaders from the response and adds them as fields to `res`
-     */
-    function extendResponse(res) {
-        // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-        const responseHeaders = res.responseHeaders;
-        const {contentType, fileExtension} = getContentType(responseHeaders);
-
-        // adding properties
-        res.contentType = contentType;
-        res.fileExtension = fileExtension;
-    }
-
     (function extendJSZip() {
-        if (typeof JSZip !== 'undefined') {
-            /** The current file index being downloaded/added to the zip */
-            JSZip.prototype.current = 0;
-            /**
+        if (typeof JSZip === 'undefined') {
+            console.warn('downloader_script: JSZip is undefined in downloader script, if you\'re using this script via @require, be sure to also include its dependencies (check script @require).' +
+                '\nMost likely missing:', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.4/jszip.min.js');
+            return;
+        }
+
+        /** The current file index being downloaded/added to the zip */
+        JSZip.prototype.current = 0;
+        /**
              The total count of files to be zipped+already zipped.
              This is useful for automatically generating the zip when zip.current >= zip.zipTotal
              */
@@ -530,15 +507,38 @@
 
                 //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
                 return xhr;
-            };
+        };
 
-            //
-
-        } else {
-            console.warn('downloader_script: JSZip is undefined in downloader script, if you\'re using this script via @require, be sure to also include its dependencies (check script @require).' +
-                '\nMost likely missing:', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.4/jszip.min.js');
-        }
+        //
     })();
+
+    /**
+     *
+     * @param responseHeaders
+     * @returns {{fileExtension: string | *, contentType: string}}
+     */
+    function getContentType(responseHeaders) {
+        const [fullMatch, mimeType1, mimeType2] = responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
+        const contentType = [mimeType1, mimeType2].join('/');
+
+        const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
+            unsafeWindow.mimeTypes[contentType].extensions[0] :
+            mimeType2;
+        return {contentType, fileExtension};
+    }
+
+    /**
+     * @param {Tampermonkey.Response} res - parses the responseHeaders from the response and adds them as fields to `res`
+     */
+    function extendResponse(res) {
+        // you'll get a match like this:    ["content-type: image/png", "image", "png"]
+        const responseHeaders = res.responseHeaders;
+        const {contentType, fileExtension} = getContentType(responseHeaders);
+
+        // adding properties
+        res.contentType = contentType;
+        res.fileExtension = fileExtension;
+    }
 
 
     function storeDownloadHistory() {
