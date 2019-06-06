@@ -230,21 +230,37 @@
             JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
             JSZip.prototype.name = '';
             JSZip.prototype.__defineGetter__('pathname', function () {
-                return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
-            });
+            return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
+        });
 
-            /**called when the zip is generated*/
-            // TODO: maybe use an EventEmitter instead of setting a single function
-            JSZip.prototype.onGenZip = function () {
+        var timeoutToAutoGenzip = 20;
+
+        /**
+         * auto genZip() when zip is fetches are inactive for a long time (when the requests die out)
+         * this timeout will be called when the fetches are inactive for a time longer than 'timeoutToAutoGenzip'
+         * @returns {number}
+         */
+        JSZip.prototype.inactivityTimeout = function () {
+            clearTimeout(this._autoGenzipTimeout); // clear any already existing timeout
+            const timeout = setTimeout(() => this.genZip(), timeoutToAutoGenzip);
+            this._autoGenzipTimeout = timeout;
+            return timeout;
+        };
+
+        /**called when the zip is generated*/
+        // TODO: maybe use an EventEmitter instead of setting a single function
+        JSZip.prototype.onGenZip = function () {
                 console.log('onGenZip()', this);
             };
 
-            JSZip.prototype.genZip = function genZip(updateCallback = null) {
-                const zip = this;
+        JSZip.prototype.genZip = function genZip(updateCallback = null) {
+            const zip = this;
 
-                zip.__ongenzipProgressCounter = 0; //TODO: refactor: delete zip
+            clearTimeout(zip._autoGenzipTimeout);
 
-                var genzipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
+            zip.__ongenzipProgressCounter = 0; //TODO: refactor: delete zip
+
+            var genzipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
                     strokeWidth: 4,
                     easing: 'easeInOut',
                     duration: 1400,
@@ -392,12 +408,14 @@
                 const xhr = GM_xmlhttpRequestPromise({
                     method: 'GET',
                     url: fileUrl,
-                    responseType: 'arraybuffer',
-                    binary: true,
-                    onload: res => {
-                        if (zip.file(fileName)) {
-                            console.warn('ZIP already contains the file: ', fileName);
-                            return;
+                responseType: 'arraybuffer',
+                binary: true,
+                onload: res => {
+                    zip.inactivityTimeout();
+
+                    if (zip.file(fileName)) {
+                        console.warn('ZIP already contains the file: ', fileName);
+                        return;
                         }
 
                         res && console.debug(
@@ -436,18 +454,22 @@
                             if (zip.progressBar) zip.progressBar.destroy();
                             zip.genZip();
                         }
-                        zip.activeZipThreads--;
-                    },
-                    onreadystatechange: res => {
-                        console.debug('Request state changed to: ' + res.readyState);
-                        if (res.readyState === 4) {
-                            console.debug('ret.readyState === 4');
-                        }
-                    },
-                    onerror: res => {
-                        if (checkResponse(res, fileUrl, fileName)) {
-                            return;
-                        }
+                    zip.activeZipThreads--;
+                },
+                onreadystatechange: res => {
+                    zip.inactivityTimeout();
+
+                    console.debug('Request state changed to: ' + res.readyState);
+                    if (res.readyState === 4) {
+                        console.debug('ret.readyState === 4');
+                    }
+                },
+                onerror: res => {
+                    zip.inactivityTimeout();
+
+                    if (checkResponse(res, fileUrl, fileName)) {
+                        return;
+                    }
 
                         console.error('An error occurred.',
                             '\nreadyState: ', res.readyState,
@@ -457,12 +479,13 @@
                             '\nfinalUrl: ', res.finalUrl,
                             '\nresponseText: ', res.responseText,
                         );
-                        zip.activeZipThreads--;
-                    },
-                    onprogress: res => {
+                    zip.activeZipThreads--;
+                },
+                onprogress: res => {
+                    zip.inactivityTimeout();
 
-                        // FIXME: fix abort condition, when should it abort?
-                        const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
+                    // FIXME: fix abort condition, when should it abort?
+                    const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
                         if (abortCondition && false) {
                             if (xhr.abort) {
                                 xhr.abort();
