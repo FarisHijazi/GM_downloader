@@ -26,7 +26,6 @@
  * (useful when combined with other scripts)
  */
 
-(function () {
 
     /**
      * @param details can have the following attributes:
@@ -51,59 +50,47 @@
      */
     // GM_download;
 
-    /**
-     * Response callback
-     * @callback scriptish_response_callback
-     * @param {number} responseCode
-     * @param {string} responseMessage
-     */
-
 
     /**
-     * https://tampermonkey.net/documentation.php#GM_xmlhttpRequest
-     *
-     * Arguments
-     * Object details
-     * A single object with properties defining the request behavior.
-     *
-     * @param {Object} details - the main details object
-     *
-     * @param {String=} details.method - Optional. The HTTP method to utilize. Currently only "GET" and "POST" are supported. Defaults to "GET".
-     * @param {String} details.url - The URL to which the request will be sent. This value may be relative to the page the user script is running on.
-     * @param {scriptish_response_callback=} [details.onload] - A function called if the request finishes successfully. Passed a Scriptish response object (see below).
-     * @param {scriptish_response_callback=} [details.onerror] - A function called if the request fails. Passed a Scriptish response object (see below).
-     * @param {scriptish_response_callback=} [details.onreadystatechange] - A function called whenever the request's readyState changes. Passed a Scriptish response object (see below).
-     * @param {String=} [details.data] - Content to send as the body of the request.
-     * @param {Object=} [details.headers] - An object containing headers to be sent as part of the request.
-     * @param {Boolean=} [details.binary] - Forces the request to send data as binary. Defaults to false.
-     * @param {Boolean=} [details.makePrivate] - Forces the request to be a private request (same as initiated from a private window). (0.1.9+)
-     * @param {Boolean=} [details.mozBackgroundRequest] - If true security dialogs will not be shown, and the request will fail. Defaults to true.
-     * @param {String=} [details.user] - The user name to use for authentication purposes. Defaults to the empty string "".
-     * @param {String=} [details.password] - The password to use for authentication purposes. Defaults to the empty string "".
-     * @param {String=} [details.overrideMimeType] - Overrides the MIME type returned by the server.
-     * @param {Boolean=} [details.ignoreCache] - Forces a request to the server, bypassing the cache. Defaults to false.
-     * @param {Boolean=} [details.ignoreRedirect] - Forces the request to ignore both temporary and permanent redirects.
-     * @param {Boolean=} [details.ignoreTempRedirect] - Forces the request to ignore only temporary redirects.
-     * @param {Boolean=} [details.ignorePermanentRedirect] - Forces the request to ignore only permanent redirects.
-     * @param {Boolean=} [details.failOnRedirect] - Forces the request to fail if a redirect occurs.
-     * @param {int=} redirectionLimit: Optional - Range allowed: 0-10. Forces the request to fail if a certain number of redirects occur.
-     * Note: A redirectionLimit of 0 is equivalent to setting failOnRedirect to true.
-     * Note: If both are set, redirectionLimit will take priority over failOnRedirect.
-     *
-     * Note: When ignore*Redirect is set and a redirect is encountered the request will still succeed, and subsequently call onload. failOnRedirect or redirectionLimit exhaustion, however, will produce an error when encountering a redirect, and subsequently call onerror.
-     *
-     * For "onprogress" only:
-     *
-     * @param {Boolean} lengthComputable: Whether it is currently possible to know the total size of the response.
-     * @param {int} loaded: The number of bytes loaded thus far.
-     * @param {int} total: The total size of the response.
-     *
-     * @return {{abort: Function}}
+ * @typedef {Promise} RequestPromise - (), a custom object extended from Promise
+ *
+     * @property {Function} onload - identical to `promise.then()`
+     * @property {Function} onerror -
+     * @property {Function} onprogress -
+     * @property {Function} ontimeout -
+     * @property {Function} onabort -
+     * @property {Function} onloadstart -
+     * @property {Function} onreadystatechange -
      */
+
+    /**
+     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
+     * @property {string}    url
+     * @property {string}    name
+     * @property {bool}      [rename=true]
+     * @property {string}    directory
+     * @property {string[]}  fallbackUrls - list of urls
+     * @property {Element}   element - an HTML element
+     * @property {string}    mainDirectory
+     * @property {string}    directory
+     * @property {string}    fileExtension
+     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
+     * @property {number}    attempts - Each download has a few attempts before it gives up.
+     * @property {Function}  onload
+     * @property {Function}  onerror
+     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
+     *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
+     */
+
+ //TODO: FIXME: there's an issue with filenames ending with '_', like "example.gif_", this is an issue (not sure where it's happening)
+
+// main
+(function () {
 
 
     if (typeof unsafeWindow === 'undefined') unsafeWindow = window;
 
+    const MAX_NAME_LENGTH = 128;
 
     // Note: directory names should include the trailing "/" path terminator
     const Config = $.extend({
@@ -121,6 +108,7 @@
     }, GM_getValue('Config'));
 
     const invalidNameCharacters = '@*:"|<>\\n\\r\?\~' + '\u200f';
+    var isValidExtension = ext => typeof (ext) === 'string' && !/com|exe/i.test(ext) && ext.length > 0 && ext.length <= 3;
 
     var debug = true;
     var fileNumber = 1;
@@ -159,6 +147,7 @@
             return fakeLink.href;
         }
     })();
+
     /**
      * zips that have been initiated but have not yet been generated
      * @type {Set<any>}
@@ -171,7 +160,7 @@
 
     /** mimeTypeJSON contains the mimeType to file extension database, useful for getting the extension from the mimetype */
     if (!(typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0)) {
-        fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
+        GM_fetch('https://cdn.rawgit.com/jshttp/mime-db/master/db.json', {
             method: 'GET', // *GET, POST, PUT, DELETE, etc.
             mode: 'cors', // no-cors, cors, *same-origin
             cache: 'force-cache', // *default, no-cache, reload, force-cache, only-if-cached
@@ -183,7 +172,8 @@
             redirect: 'follow', // manual, *follow, error
             referrer: 'no-referrer', // no-referrer, *client
             body: null, // body data type must match "Content-Type" header
-        }).then(res => res.json()).then(json => {
+        }).then(res => {
+            const json = JSON.parse(res.responseText);
             if (typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0) {
                 debug && console.debug('unsafeWindow already contains unsafeWindow.mimeTypes, no need to load another one');
                 return;
@@ -205,10 +195,15 @@
     }
 
     (function extendJSZip() {
-        if (typeof JSZip !== 'undefined') {
-            /** The current file index being downloaded/added to the zip */
-            JSZip.prototype.current = 0;
-            /**
+        if (typeof JSZip === 'undefined') {
+            console.warn('downloader_script: JSZip is undefined in downloader script, if you\'re using this script via @require, be sure to also include its dependencies (check script @require).' +
+                '\nMost likely missing:', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.4/jszip.min.js');
+            return;
+        }
+
+        /** The current file index being downloaded/added to the zip */
+        JSZip.prototype.current = 0;
+        /**
              The total count of files to be zipped+already zipped.
              This is useful for automatically generating the zip when zip.current >= zip.zipTotal
              */
@@ -216,72 +211,225 @@
             JSZip.prototype.totalSize = 0;
             JSZip.prototype.totalLoaded = 0;
 
-            JSZip.prototype.generateIndexHtml = function generateIndexHtml() {
-                let html = '';
+        JSZip.prototype.generateIndexHtml = function generateIndexHtml(local = true) {
+            const $body = $('<body>');
                 for (const key of Object.keys(this.files)) {
                     try {
                         const file = this.files[key];
                         /**{url, name, page}*/
                         const data = JSON.parse(file.comment ? file.comment : '{}');
 
-                        html += '<div> <a href="' + data.url || file.name + '">' +
-                            '<img src="' + file.name + '" alt="' + key + '"> </a>' +
-                            '<div>' +
-                            '<a href="' + data.page + '" target="_blank">' + file.name + ' </a> <h4>' + file.name + ' </h4> ' +
-                            '<h3>' + data.name || file.name + '</h3> ' +
-                            '</div>' +
-                            '</div>';
+                        //TODO: replace this with using the element API, using raw strings causes issues
+                    const fname = '' + file.name;
+                    const src = '' + data.page;
+
+                    $body.append(
+                        $('<div class="container">')
+                            .append(
+                                $('<a class="local">local</a>')
+                                    .attr({
+                                        'href': String(data.url || file.name),
+                                    })
+                                    .append(
+                                        $('<img class="local" alt="local image failed to load">')
+                                            .attr({
+                                                src: fname,
+                                                alt: fname,
+                                            })
+                                    )
+                            )
+                            .append(
+                                $('<div class="online">')
+                                    .append(
+                                        $('<a  class="online" target="_blank">')
+                                            .attr({
+                                                href: src,
+                                            })
+                                            .text(fname)
+                                    )
+                                    .append(
+                                        $('<h4>').text(fname)
+                                    )
+                            )
+                            .append(
+                                $('<h3>').text(String(data.name || file.name))
+                            )
+                    );
+
                     } catch (e) {
-                        console.error(e)
+                    console.error(e);
                     }
                 }
-                return this.file('index.html', new Blob([html], {type: 'text/plain'}));
+
+            return this.file('index.html', new Blob([$body.html()], {type: 'text/plain'}));
             };
             JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
-            JSZip.prototype.zipName = '';
-            /**called when the zip is generated*/
-            // TODO: maybe use an EventEmitter instead of setting a single function
-            JSZip.prototype.onGenZip = function () {
+            JSZip.prototype.name = '';
+            JSZip.prototype.__defineGetter__('pathname', function () {
+            return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
+        });
+
+        JSZip.prototype._inactivityTimeout = 20 * 1000;
+
+        /**
+         * reset the _inactivityTimeout
+         *
+         * auto genZip() when zip is fetches are inactive for a long time (when the requests die out)
+         * this timeout will be called when the fetches are inactive for a time longer than 'timeoutToAutoGenZip'
+         */
+        JSZip.prototype.startInactivityTimeout = function () {
+            clearTimeout(this._inactivityTimeout); // clear any already existing timeout
+            this._inactivityTimeout = setTimeout(() => this.genZip(), this._inactivityTimeout);
+        };
+
+        /**called when the zip is generated*/
+        // TODO: maybe use an EventEmitter instead of setting a single function
+        JSZip.prototype.onGenZip = function () {
                 console.log('onGenZip()', this);
             };
-            JSZip.prototype.genZip = function genZip(updateCallback = null) {
 
-                if (!updateCallback) updateCallback = metadata => {
-                    if (++this.__ongenzipProgressCounter % 50 === 0) {
+        /**
+         * @param {(Object[]|Downloadable[])=} fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
+         *  if empty, will use images matching this selector by default: "img.img-big"
+         *
+         * @param {string=} zipName
+         * @return {Promise<?>} TODO: specify type
+         */
+        JSZip.prototype.zipFiles = function(fileUrls, zipName = '') {
+            const zip = this;
+
+            pendingZips.add(zip);
+            zip.name = (zipName ? zipName : document.title).replace(/\//g, ' ');
+            var pb = zip.progressBar; // init progressBar
+            zip.fetchList = [];
+
+            const files = Array.from(fileUrls || document.querySelectorAll('img.img-big, img[loaded="true"]'))
+                .map(normalizeFile)
+                .filter(file => !!file && file.url);
+
+            zip.zipTotal = files.length;
+
+            window.addEventListener('beforeunload', zipBeforeUnload);
+            console.log('zipping files:', files);
+
+            // give access to the zip variable by adding it to the global object
+            console.log(
+                `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
+            );
+            unsafeWindow.zips.push(zip);
+
+            const promises = [];
+            for (const file of files)
+                try {
+                    const req = zip.requestAndZip(file.url, file.name);
+                    promises.push(req);
+                } catch (r) {
+                    console.error(r);
+                }
+
+            //TODO: this should return a promise of when all the files have been zipped,
+            //          this can be done using Promise.all(zip.fetchList)
+            return Promise.all(promises);
+        };
+
+        JSZip.prototype.genZip = function genZip(updateCallback = null) {
+            const zip = this;
+
+            clearTimeout(zip._inactivityTimeout);
+
+            zip._ongenZipProgressCounter = 0; //TODO: refactor: delete zip
+
+            if (zip._genZipProgressBar != null) { // if already generating zip
+                console.log('genZip(): genZipProgressBar is already defined, gonna finish the old request first and abort this one, try again once it\'s done', zip);
+                return;
+            }
+
+            zip._genZipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
+                    strokeWidth: 4,
+                    easing: 'easeInOut',
+                    duration: 1400,
+                    color: '#FCB03C',
+                    trailColor: '#eee',
+                    trailWidth: 1,
+                    svgStyle: {
+                        // width: '100%',
+                        height: '100px',
+                    },
+                    text: {
+                        value: '0',
+                        style: {
+                            // Text color.
+                            // Default: same as stroke color (options.color)
+                            color: '#999',
+                            position: 'absolute',
+                            right: '0',
+                            top: '30px',
+                            padding: 0,
+                            margin: 0,
+                            transform: null
+                        },
+                        alignToBottom: false,
+                        autoStyleContainer: false,
+                    },
+                    from: {color: '#FFEA82'},
+                    to: {color: '#ED6A5A'},
+                    step: (state, bar) => {
+                        bar.setText(Math.round(bar.value() * 100) + ' %');
+                    },
+                });
+
+                const _updateCallback = function (metadata) {
+                zip._genZipProgressBar.animate(metadata.percent / 100);
+
+                if (++zip._ongenZipProgressCounter % 50 === 0) {
                         console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
                         if (metadata.currentFile) {
                             console.log('current file = ' + metadata.currentFile);
                         }
                     }
+
+                    if (typeof (updateCallback) === 'function')
+                        updateCallback.call(zip, metadata);
                 };
 
-                this.__ongenzipProgressCounter = 0;
-                return this.generateIndexHtml()
-                    .generateAsync({type: 'blob'}, updateCallback)
+
+                return zip.generateIndexHtml()
+                    .generateAsync({type: 'blob'}, _updateCallback)
                     .then(blob => {
                         const objectUrl = URL.createObjectURL(blob);
-                        console.debug('zip objectUrl', objectUrl);
+                        console.debug('zip objectUrl\n' + objectUrl);
 
-                        //TODO: replace this with GM_downloadPromise and return that
-                        const name = this.zipName.replace('$name$', this.zipName || document.title);
-                        GM_download({
-                            url: objectUrl,
-                            name: `${Config.MAIN_DIRECTORY}${name} [${Object.keys(this.files).length}].zip`,
-                            onload: function () {
-                                this.onDownload && this.onDownload();
-                            }
-                        });
-                        this.isZipGenerated = true;
+                        zip.name = zip.name.replace('$name$', document.title);
+                        zip.isZipGenerated = true;
 
-                        this.onGenZip && this.onGenZip();
 
                         // remove from pendingZips set
-                        var result = pendingZips.delete(this);
+                        const result = pendingZips.delete(zip);
                         if (result === false) {
                             console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
                         }
+
+                    const onload = function (e) {
+                        zip.onDownload && zip.onDownload();
+                        zip._genZipProgressBar && zip._genZipProgressBar.destroy();
+                        zip._genZipProgressBar = undefined;
+
+                        zip.onGenZip && zip.onGenZip();
+                    };
+
+                        return GM_download({
+                            url: objectUrl,
+                            name: zip.pathname,
+                        onload: onload,
+                            onerror: function (e) {
+                                console.warn('couldn\'t download zip', zip, e);
+                                saveByAnchor(objectUrl, zip.pathname);
+                            onload(e);
+                            }
+                        });
                     });
             };
+
             /**
              * @param fname:    the desired file name
              * @returns the first iterated filename valid for the current zip (iterated: with a number added to its end).
@@ -309,20 +457,173 @@
             JSZip.prototype.activeZipThreads = 0;
             JSZip.prototype.totalSize = 0;
             JSZip.prototype.totalLoaded = 0;
-            JSZip.prototype.responseBlobs = new Set();
-            JSZip.prototype.zipName = document.title;
             /** @type {ProgressBar} */
             JSZip.prototype.__defineGetter__('progressBar', function () {
                 if (!this._progressBar)
                     this._progressBar = setupProgressBar();
                 return this._progressBar;
             });
-        } else {
-            console.warn('downloader_script: JSZip is undefined in downloader script, if you\'re using this script via @require, be sure to also include its dependencies (check script @require).' +
-                '\nMost likely missing:', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.4/jszip.min.js');
-        }
+
+
+        /**
+         * @typedef {Object} FetchObject
+         *
+         */
+
+            //TODO: this should contain all the info related to the file and its request
+            /**
+             * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
+             */
+            JSZip.prototype.fetchList = [];
+
+            //FIXME: fix checkResponse
+            //TODO: make better arguments
+            /**
+         * Requests the image and adds it to the local zip
+         * @param fileUrl
+         * @param fileName
+         */
+        JSZip.prototype.requestAndZip = function (fileUrl, fileName) {
+            var zip = this;
+            var fileSize = 0;
+            zip.loadedLast = 0;
+            zip.activeZipThreads++;
+
+            //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
+            fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
+
+                if (zip.file(fileName)) {
+                    console.warn('ZIP already contains the file: ', fileName);
+                    return;
+                }
+
+            var xhr = {};
+            xhr = GM_xmlhttpRequestPromise({
+                    method: 'GET',
+                    url: fileUrl,
+                responseType: 'arraybuffer',
+                binary: true,
+                onload: res => {
+                    zip.startInactivityTimeout();
+
+                    if (zip.file(fileName)) {
+                        console.warn('ZIP already contains the file: ', fileName);
+                        return;
+                        }
+
+                    res && console.debug('onload:', res);
+
+                    const fileExtension = contentTypeToFileExtension(res.headers['content-type']);
+
+                    xhr.res = res;
+                    const blob = new Blob([res.response], {type: res.headers['content-type']});
+
+                    const name = `${fileName.trim()}_${zip.current + 1}.${fileExtension}`;
+
+                    console.log(
+                        'Adding file to zip:',
+                        {
+                            fileName: fileName,
+                            contentType: res.headers['content-type'],
+                            name: name,
+                            url: fileUrl,
+                        }
+                    );
+
+                    zip.file(name, blob);
+                    xhr.blob = blob;
+                        zip.current++;
+
+                        // if finished, stop
+                        if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
+                            return;
+                        }
+
+                    // Completed!
+                    // TODO: move this outside, make it that when all requestAndZip()s finish
+                        if (zip.current >= zip.zipTotal - 1) {
+                            debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
+                            zip.zipTotal = -1;
+                            if (zip.progressBar) zip.progressBar.destroy();
+                            zip.genZip();
+                        }
+                    zip.activeZipThreads--;
+                },
+                onreadystatechange: res => {
+                    zip.startInactivityTimeout();
+
+                    console.debug('Request state changed to: ' + res.readyState);
+                    if (res.readyState === 4) {
+                        console.debug('ret.readyState === 4');
+                    }
+                },
+                onerror: res => {
+                    zip.startInactivityTimeout();
+
+                    console.error('An error occurred:\n', res);
+
+                    zip.activeZipThreads--;
+                },
+                onprogress: res => {
+                    zip.startInactivityTimeout();
+
+                    // FIXME: fix abort condition, when should it abort?
+                    const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
+                        if (abortCondition && false) {
+                            if (xhr.abort) {
+                                xhr.abort();
+                                console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
+                            } else
+                                console.error('xhr.abort not defined');
+                            return;
+                        }
+
+                        if (res.lengthComputable) {
+                            if (fileSize === 0) { // happens once
+                                fileSize = res.total;
+                                zip.totalSize += fileSize;
+                            }
+                            const loadedSoFar = res.loaded;
+                        const justLoaded = loadedSoFar - zip.loadedLast; // What has been added since the last progress call
+                        const fileprogress = loadedSoFar / res.total; //
+
+                            zip.totalLoaded += justLoaded;
+                            const totalProgress = zip.totalLoaded / zip.totalSize;
+
+                            if (debug) console.debug(
+                                'loadedSoFar:', res.loaded,
+                                '\njustLoaded:', loadedSoFar - zip.loadedLast,
+                                '\nfileprogress:', fileprogress
+                            );
+
+                            const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
+                            if (zip.progressBar) {
+                                zip.progressBar.set(totalProgress);
+                                zip.progressBar.setText(progressText);
+                            } else {
+                                $('#progressbar-container').text(progressText);
+                            }
+
+                            zip.loadedLast = loadedSoFar;
+                        }
+                    },
+                });
+
+                zip.fetchList.push(xhr);
+
+                //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
+                return xhr;
+        };
+
+        //
     })();
 
+    function contentTypeToFileExtension(contentType, mimeTypes = unsafeWindow.mimeTypes) {
+        contentType = contentType.split(' ')[0];
+        return mimeTypes.hasOwnProperty(contentType) && mimeTypes[contentType] ?
+            mimeTypes[contentType].extensions[0] :
+            contentType.split('/').pop().match(/\w+/); // match the first few word chars
+    }
 
     function storeDownloadHistory() {
         if (downloadedSet.size <= 0) return;
@@ -336,16 +637,6 @@
         return GM_setValue('downloadHistory', Array.from(new Set(mergedDlH)));
     }
 
-    /**
-     url - the URL from where the data should be downloaded
-     name - the filename - for security reasons the file extension needs to be whitelisted at the Tampermonkey options page
-     headers - see GM_xmlhttpRequest for more details
-     saveAs - boolean value, show a saveAs dialog
-     onerror callback to be executed if the download ended up with an error
-     onload callback to be executed if the download finished
-     onprogress callback to be executed if the download made some progress
-     ontimeout callback to be executed if the download failed due to a timeout
-     */
     function setNameFilesByNumber(newValue) {
         Config.NAME_FILES_BY_NUMBER = newValue;
         GM_getValue('NAME_FILES_BY_NUMBER', Config.NAME_FILES_BY_NUMBER);
@@ -353,18 +644,44 @@
 
 
     /** if there's a **special** hostname url (like gify.com), the big url can be extracted */
-    function extractFullUrlForSpecialHostnames(fileUrl) {
-        if (new URL(fileUrl).hostname.indexOf('gfycat.com') === 0) {
-            fileUrl = fileUrl.replace(/gfycat\.com/i, 'giant.gfycat.com') + '.webm';
+    function tryToGetBigImageUrl(fileUrl) {
+        try {
+            const url = new URL(fileUrl);
+            if (url.hostname.indexOf('gfycat.com') === 0) {
+                url.hostname = 'giant.gfycat.com';
+                url.pathname += '.webm';
+                return url.toString()
+            } else
+            // "https://pbs.twimg.com/media/"
+            if (/pbs\.twimg\.com/.test(url.hostname) && /^\/media/.test(url.pathname)) {
+                url.searchParams.set('format', 'jpg');
+                url.searchParams.set('name', 'orig');
+                return url.toString()
+            } else if (/imgur\.com/.test(url.hostname)) {
+                const imgurThumbnailToFullres = src => 'https://i.imgur.com/' + src.split('/').pop()
+                    .replace(/b\./, '.');// remove the last 'b'
+                return imgurThumbnailToFullres(fileUrl)
+            }
+
+
+            if (/https:\/\/gfycat\.com\/gifs\/detail\/.+/.test(fileUrl)) { // if gfycat home page url, image can be extracted
+                return `https://thumbs.gfycat.com/${fileUrl.split('/').pop()}-size_restricted.gif`;
+            }
+        } catch (e) {
         }
         return fileUrl;
     }
 
     /**
-     * adds chain-able function setters to a promise
-     * given a promise and a details object (any options parameter object)
+     * Adds chain-able function setters to a promise
+     * given a `promise` and a `details` object (any options parameter object)
      *
-     * allows for
+     * Renames all the function type objects in `details` to by prepending '_' to them,
+     * while the original functions will now become the setters.
+     *
+     * @param {Promise} promise
+     * @param {Object} details - this gets mutated
+     *
      *
      * @example
      *  details = { onload: function (e) { } }
@@ -381,8 +698,7 @@
      *      ...
      *  });
      *
-     * @param {Promise} promise
-     * @param {Object} details
+     * @private
      */
     function _bindPromiseSetters(promise, details) {
         for (const key of Object.keys(details)) {
@@ -394,12 +710,18 @@
                         if (typeof callback === 'function')
                             ret = callback(e);
 
-                        return ret !== undefined ? ret : promise;
+                        var newPromise = (ret instanceof Promise) ?
+                            ret :
+                            Promise.resolve(ret);
+
+                        return _bindPromiseSetters(newPromise, details);
                     };
-                    return promise;
+                    return this;
                 }
             }
         }
+
+        return promise;
     }
 
     function _detectXml(text) {
@@ -414,7 +736,7 @@
      * @returns {Object}
      */
     //FIXME: big mess, sort out what variables are needed and what aren't, and what o should contain
-    function download_raw(o) {
+    function download2(o) {
         // to the actual downloading part
         // FIXME: to we even need fileUrl and finalName? are they gonna change? aren't they the same as details.name and details.url?
         /**
@@ -424,7 +746,7 @@
         var promise = {};
 
         /**
-         * keep in mind that the details object is specific to a single download_raw() function call, do NOT pass details to another download_raw(details) function
+         * keep in mind that the details object is specific to a single download2() function call, do NOT pass details to another download2(details) function
          * details is to be passed to the GM_download and xmlhttpRequest() only.
          * changing names and urls is to be done with the options objectc o
          * @type {{headers: {}, onerrorFinal: onerrorFinal, onerror: onerror, saveAs: boolean, onloadFinal: onloadFinal, name: (*|string), onprogress: onprogress, url: *, ontimeout: ontimeout, onload: onload}}
@@ -453,7 +775,7 @@
                                 case 'network_failed':
                                     // retry as if that didn't even happen
                                     o.attempts = Config.defaultDownloadAttempts;
-                                    download_raw(o);
+                                    download2(o);
                                     break;
                                 case 'not_whitelisted':
                                     download(
@@ -562,15 +884,16 @@
             },
             onerrorFinal: function (rr) { //  default is to try
                 GM_download({
-                    name: name + '.' + getFileExtension(o.url),
+                    name: o.name + '.' + getFileExtension(o.url),
                     url: o.url,
                     onload: details.onload(rr),
                     onerror: function (rrr) {
                         console.warn('Download failed:', o.url, rrr);
+                        saveByAnchor(o.url, o.name + '.' + getFileExtension(o.url));
                     }
                 });
                 downloadedSet.delete(o.url); // upon failure, remove the url from the list to give it another chance.
-                console.error('Download failed, onerrorFinal():', name, o.url, rr);
+                console.error('Download failed, onerrorFinal():', o.name, o.url, rr);
             },
         };
 
@@ -594,34 +917,17 @@
         return promise;
     }
 
-    /**
-     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
-     * @property {string}    url
-     * @property {string}    name
-     * @property {bool}      [rename=true]
-     * @property {string}    directory
-     * @property {string[]}  fallbackUrls - list of urls
-     * @property {Element}   element - an HTML element
-     * @property {string}    mainDirectory
-     * @property {string}    directory
-     * @property {string}    fileExtension
-     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
-     * @property {number}    attempts - Each download has a few attempts before it gives up.
-     * @property {Function}  onload
-     * @property {Function}  onerror
-     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
-     *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
-     */
 
     //TODO: add support for passing url patterns
     /**
-     * @param {(string|Element|downloadOptions)} fileUrl the url to the file to download
+     * @param {(downloadOptions|string|Element)} fileUrl the url to the file to download
      * @param {string=} fileName - gets extracted by default
      * @param {(downloadOptions|Object)=} opts - options, note, this is always the last argument
      *      so if only one parameter is passed, it will be considered the options object
      */
     function download(fileUrl, fileName = '', opts = {}) {
         const args = Array.from(arguments);
+        /** @type {DownloadOptions} */
         opts = args.pop();
         // if opts was a string (probably directory)
         if (typeof opts === 'string') {
@@ -651,6 +957,8 @@
                 opts[prop] = element[prop];
             }
         }
+
+        // check if there are enough attempts remaining
         if (typeof opts.attempts === 'number') {
             if (opts.attempts > 0) {
                 opts.attempts--;
@@ -664,9 +972,9 @@
         opts = $.extend({
             url: fileUrl,
             name: fileName,
-            fallbackUrls: typeof (PProxy) !== 'undefined' && PProxy.proxyList ? PProxy.proxyList(fileUrl) : [], // TODO: implement this
+            fallbackUrls: typeof (PProxy) !== 'undefined' && PProxy.proxyList ? PProxy.proxyList(fileUrl) : [],
             directory: '',
-            fileExtension: null,
+            fileExtension: undefined,
             blobTimeout: -1, // don't delete blobs
             attempts: Config.defaultDownloadAttempts,
             element: undefined,
@@ -688,15 +996,15 @@
         // if iterable, set the URLs as fallback URLs
         if (typeof opts.url === 'object' && typeof opts.url[Symbol.iterator] === 'function') {
             opts.fallbackUrls.concat(opts.url);
-            opts.url = opts.url[0];
-            throw 'fallback URLs not yet implemented';
+            opts.url = opts.fallbackUrls.shift();
+            // throw 'fallback URLs not yet implemented'; //TODO: test fallbackUrls
         }
         opts.fallbackUrls = [].filter.call(opts.fallbackUrls, s => !!s);
 
         if (!opts.url) throw 'Input URL is null';
 
         //
-        opts.url = extractFullUrlForSpecialHostnames(String(opts.url).replace(/["]/gi, ''));
+        opts.url = tryToGetBigImageUrl(String(opts.url).replace(/["]/gi, ''));
 
         if (/^data:/.test(opts.url) && !Config.ALLOW_BASE64_IMAGE_DOWNLOADS) {
             console.error('The source is a base64-type, download was prevented:', opts.url);
@@ -720,7 +1028,6 @@
                 'a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(opts.name))) + ' ' + (++fileNumber);
         }
         opts.rename = false; // set to false for successive retries (otherwise the name would be ruined)
-        // TODO: kill global variables (kill fileNumber)
 
         // == naming the directory
 
@@ -738,20 +1045,21 @@
             opts.directory += '/';
 
         // == file extension
-        let fileExtension = opts.fileExtension || getFileExtension(opts.url);
+        opts.fileExtension = opts.fileExtension || getFileExtension(opts.url);
         // remove all extra extensions (don't remove it if there isn't a fileExtension)
-        if (fileExtension) opts.name = opts.name.replace(RegExp('\.' + fileExtension, 'gi'), '');
+        if (opts.fileExtension) opts.name = opts.name.replace(RegExp('\.' + opts.fileExtension, 'gi'), '');
 
-        debug && console.log(
-            'fileUrl:', opts.url,
+        console.debug(
+            'final download() args:',
+            '\nfileUrl:', opts.url,
             '\ndownloadDirectory:', opts.directory,
-            '\nextension:', fileExtension,
-            '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
-            '\nopts:', opts,
+            '\nextension:', opts.fileExtension,
+            '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + opts.fileExtension),
+            '\n\nopts:', opts,
         );
 
         // TODO: maybe the function should just stop here, maybe it should just be for renaming/building the opts
-        //  this is the point where we just call download_raw or something..
+        //  this is the point where we just call download2 or something..
 
 
         // extending defaults (to prevent null function issues)
@@ -778,14 +1086,14 @@
 
         // force these functions to be passed
         details = $.extend(details, {
-            name: removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + fileExtension),
+            name: removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + opts.fileExtension),
             onload: function onload(e) {
                 console.log('Download finished', opts.name, '\n' + opts.url, e);
                 downloadedSet.add(opts.url);
                 if (typeof (opts.onload) === 'function')
                     opts.onload(e);
             },
-            onerror: function (r) {
+            onerror: function (r = {error: '', details: {current: ''}}) {
                 //EXP: note: this needs to be changed to onerrorfinal once onerrorfinal is implemented
                 if (opts.attempts === 1) // this is the last attempt
                     if (typeof (opts.onerror) === 'function')
@@ -797,16 +1105,13 @@
                     '\nError:', r,
                     '\nDetails:', r.details
                 );
-                switch (r.error.toLowerCase()) {
+                switch (r.error) {
                     case 'not_succeeded':
                         switch (r.details.current.toLowerCase()) {
                             case 'not_whitelisted':
                                 opts.url = opts.url.replace(/\?.*/, '');
-                                opts.name = opts.name.substring(0,
-                                    (opts.name.lastIndexOf('?') > -1) ?
-                                        opts.name.lastIndexOf('?') :
-                                        (opts.name.length + '.oops.jpg')
-                                );
+                                const idx = opts.name.lastIndexOf('?');
+                                opts.name = opts.name.substring(0, idx > -1 ? idx : (opts.name.length + '.oops.jpg'));
                                 download(opts);
                                 break;
                             case 'user_canceled':
@@ -827,15 +1132,33 @@
                     case 'not_supported':
                         break;
                     default:
-                        opts.attempts = 1;
+                        console.warn('unknown error code:', r);
+                        if (opts.fallbackUrls.length)
+                            opts.url = opts.fallbackUrls.shift();
+                        else
+                            opts.attempts = 1;
                         download(opts);
                 }
             },
         });
+        delete details.element;
+        delete details.imgEl;
 
+        //FIXME: VM148:9 Uncaught TypeError: Converting circular structure to JSON
+        //     --> starting at object with constructor 'HTMLImageElement'
+        //     |     property '_meta' -> object with constructor 'Object'
+        //     --- property 'imgEl' closes the circle
         GM_download(details);
     }
 
+
+    function parseResponseHeaders(responseHeaders) {
+        return Object.fromEntries(
+            (responseHeaders || '').split('\n')
+                .map(line => line.split(': '))
+                .filter(pair => pair[0] !== undefined && pair[1] !== undefined)
+        );
+    }
 
     /**
      * basic promise that will be built up on later, pure GM_download promise
@@ -846,26 +1169,39 @@
      */
     function GM_downloadPromise(url, opts = {}) {
         var xhr = {};
+        var timeout;
         var details = $.extend({
             url: url,
             name: 'untitled.gif',
             headers: undefined,
             saveAs: false,
             timeout: undefined,
+
+            // actual callbacks (passed by user)
+            _onload: () => undefined,
+            _onerror: () => undefined,
+            _onprogress: () => undefined,
+            _ontimeout: () => undefined,
         }, opts);
+
+        // prepend all functions with '_'
+        for (const key of Object.keys(details)) {
+            if (typeof (details[key]) === 'function' && key[0] !== '_') {
+                details['_' + key] = details[key];
+                delete details[key];
+            }
+        }
+
         const promise = new Promise(function (resolve, reject) {
             console.debug('promise.execute()');
             details = $.extend(details, {
                 url: url,
-                // actual callbacks (passed by user)
-                _onload: () => undefined,
-                _onerror: () => undefined,
-                _onprogress: () => undefined,
-                _ontimeout: () => undefined,
 
                 // the functions that the user passes
                 onload: function (res) {
                     if (res && res.status >= 200 && res.status < 300) {
+                        // parsing headers object from responseHeaders (string)
+                        res.headers = parseResponseHeaders(res.responseHeaders);
                         details._onload(res);
                         resolve(res);
                     } else {
@@ -887,11 +1223,12 @@
 
             //HACK: delay so `details` isn't passed immediately giving the promise time to be constructed
             //      (promise.onprogress().onload().onerror()....)
-            setTimeout(function () {
+            timeout = setTimeout(function () {
                 console.log('GM_download(', details, ')\n ->', promise);
                 try {
                     xhr = GM_download(details);
                 } catch (e) {
+                    console.error(e);
                     reject(e);
                 }
             }, 1);
@@ -902,6 +1239,7 @@
 
         promise.onload = promise.then;
         promise.abort = () => {
+            clearTimeout(timeout);
             if (xhr && xhr.abort) {
                 xhr.abort();
             } else {
@@ -916,36 +1254,20 @@
     }
 
     /**
-     * @typedef {Promise} RequestPromise
-     * @property {Function} onload - identical to `promise.then()`
-     * @property {Function} onerror -
-     * @property {Function} onprogress -
-     * @property {Function} ontimeout -
-     * @property {Function} onabort -
-     * @property {Function} onloadstart -
-     * @property {Function} onreadystatechange -
-     */
-
-    /**
-     * TODO: complete docs
-     * @param {string} url
-     * @param {Object} opts
-     * @param {(*|string)=} opts.url - same as url, the first one is stronger
-     * @param {string='GET'} opts.method - 'GET' or 'POST'
-     * @param {(*)=} opts.headers -
-     * @param {(*)=} opts.data -
-     * @param {boolean=false} opts.binary -
-     * @param {number=} opts.timeout -
-     * @param {Object=} opts.context -
-     * @param {(*)=} opts.responseType -
-     * @param {string=} opts.overrideMimeType -
-     * @param {string=false} opts.anonymous -
-     * @param {boolean=false} opts.fetch -
-     * @param {(*|string)=} opts.username -
-     * @param {(*|string)=} opts.password -
+     * @param {(string|Tampermonkey.Request|Object)} url
+     * @param {(Tampermonkey.Request|Object)=} opts
      * @returns {RequestPromise}
+     *
+     * onload will always have a proper response object (will never be null)
+     * and the response.headers object is added
      */
     function GM_xmlhttpRequestPromise(url, opts = {}) {
+        if (arguments.length === 1 && typeof (url) === 'object') {
+            opts = url;
+            url = opts.url;
+        }
+
+        var timeout;
         var xhr = {};
         var details = $.extend({
             url: url,
@@ -961,10 +1283,26 @@
             fetch: false,
             username: undefined,
             password: undefined,
+
+            /// actual callbacks (passed by user)
+            _onload: (e) => undefined,
+            _onerror: (e) => undefined,
+            _onprogress: (e) => undefined,
+            _ontimeout: (e) => undefined,
+            _onabort: (e) => undefined,
+            _onloadstart: (e) => undefined,
+            _onreadystatechange: (e) => undefined,
         }, opts);
 
+        // prepend all functions with _
+        for (const key of Object.keys(details)) {
+            if (typeof (details[key]) === 'function' && key[0] !== '_') {
+                details['_' + key] = details[key];
+                delete details[key];
+            }
+        }
+
         const promise = new Promise(function (resolve, reject) {
-            console.debug('promise.execute()');
             details = $.extend(details, {
                 url: url,
                 // method: 'GET',
@@ -980,19 +1318,11 @@
                 // username: null,
                 // password: null,
 
-
-                /// actual callbacks (passed by user)
-                _onload: () => undefined,
-                _onerror: () => undefined,
-                _onprogress: () => undefined,
-                _ontimeout: () => undefined,
-                _onabort: () => undefined,
-                _onloadstart: () => undefined,
-                _onreadystatechange: () => undefined,
-
                 /// the functions that the user passes
                 onload: function (res) {
                     if (res && res.status >= 200 && res.status < 300) {
+                        // parsing headers object from responseHeaders (string)
+                        res.headers = parseResponseHeaders(res.responseHeaders);
                         details._onload(res);
                         resolve(res);
                     } else {
@@ -1022,23 +1352,25 @@
                 },
             });
 
-            setTimeout(function () {
-                console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
+            timeout = setTimeout(function () {
+                // debug && console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
 
                 try {
                     xhr = GM_xmlhttpRequest(details);
                 } catch (e) {
+                    console.error(e);
                     reject(e);
                 }
 
-            }, 0);
+            }, 1);
         });
+        _bindPromiseSetters(promise, details);
 
         // those are the setters (the ones used in the chain)
-        _bindPromiseSetters(promise, details);
         // promise.onload = undefined;
         // promise.onerror = undefined;
         promise.abort = () => {
+            clearTimeout(timeout);
             if (xhr && xhr.abort) {
                 xhr.abort();
             } else {
@@ -1050,6 +1382,7 @@
 
         return promise;
     }
+
 
     try {
         (function () {
@@ -1084,7 +1417,6 @@
                     console.log('onreadystatechange(), readyState=', e.readyState, '\n', e);
                 })
 
-
                 .onerror(function (e) {
                     console.log('onerror()', e);
                 })
@@ -1111,48 +1443,6 @@
         console.error(e);
     }
 
-    /**
-     * @deprecated
-     * @param inputUrls
-     * @param directory
-     * @param maxDlLimit
-     */
-    function downloadBatch(inputUrls, directory, maxDlLimit) { // download batch but with a max count limit
-        let message = 'downloadBatch() is deprecated, plz use download() or zipFiles() instead';
-        console.error(message);
-        alert(message);
-
-        console.log('maxDownloadCount was passed (but all inputUrls will be downloaded anyways):', maxDlLimit);
-        directory = directory || document.title;
-
-        zipImages(inputUrls, `${directory} ${directory}`);
-        if (!inputUrls) throw 'input URLs null!';
-
-        console.log('MAIN_DIRECTORY:', Config.MAIN_DIRECTORY);
-
-
-        let i = 0;
-        var interval = setInterval(() => {
-            if (i < inputUrls.length) {
-                const url = inputUrls[i];
-                download(url, null, `${location.hostname} - ${document.title}`);
-            } else clearInterval(interval);
-        }, 200);
-    }
-
-    /**@deprecated*/
-    function downloadImageBatch(inputUrls, directory) {
-        let message = 'downloadImageBatch() is deprecated, plz use download() or zipFiles() instead';
-        console.error(message);
-        alert(message);
-
-        if (!inputUrls) throw 'mainImage input URLs null!';
-
-        console.log('Image batch received:', inputUrls);
-        const batchName = `${cleanFileName(cleanGibberish(document.title), true)}/`;
-        zipImages(inputUrls, `${directory} ${batchName}`);
-    }
-
 
     function tryDecodeURIComponent(str) {
         try {
@@ -1162,6 +1452,10 @@
             return str;
         }
     }
+    /**
+    * @param fileUrl
+    * @returns filename (without extension)
+    */
     function nameFile(fileUrl) {
         if (Config.NAME_FILES_BY_NUMBER === true) return (` ${fileNumber++}`);
 
@@ -1178,16 +1472,22 @@
         return fileName;
     }
     function getFileExtension(fileUrl) {
-        const ext = clearUrlGibberish((String(fileUrl)).split(/[.]/).pop()) //the string after the last '.'
-            .replace(/[^a-zA-Z0-9].+($|\?)/gi, '') // replace everything that is non-alpha, numeric nor a '.'
-            .replace(/[^\w]/gi, '');
-        return !ext ? 'oops' : ext;
+        var ext = clearUrlGibberish((String(fileUrl)).split(/[.]/).pop()) //the string after the last '.'
+            .replace(/[^a-zA-Z0-9.]+($|\?)/gi, '') // replace everything that is non-alpha, numeric nor '.'
+            .replace(/[]/gi, '')
+        ;
+
+        if (!isValidExtension(ext)) {
+            ext = 'oops.gif';
+        }
+
+        return ext;
     }
 
     function cleanFileName(fileName, isDirectory = false) {
         // file names can't include '/' or '\'
         const fileCleanerRegex = new RegExp(`[${invalidNameCharacters}${isDirectory ? '' : '\\\\/'}]|(^[\\W.]+)|(\\s\\s+)`, 'gi');
-        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim();
+        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim().slice(MAX_NAME_LENGTH);
     }
     function removeDoubleSpaces(str) {
         return str ? str.replace(/(\s\s+)/g, ' ') : str;
@@ -1196,10 +1496,11 @@
         return removeDoubleSpaces(tryDecodeURIComponent(str).replace(/(^site)|www(\.?)|http(s?):\/\/|proxy\.duckduckgo|&f=1|&reload=on/gi, ''));
     }
 
-    /** creates an anchor, clicks it, then removes it
+    /**
+     * creates an anchor, clicks it, then removes it
      * this is done because some actions cannot be done except in this way
      * @param {string} url
-     * @param {string=} name
+     * @param {string=} name (including file extension)
      * @param {string=} target
      */
     function anchorClick(url, name = '', target = 'self') {
@@ -1236,6 +1537,18 @@
         return dialogText;
     }
 
+    /**
+     * @param fileUrls
+     * @param zipName
+     * @returns {JSZip|*|JSZip|*}
+     * @deprecated use JSZip.prototype.zipFiles()
+     */
+    function zipFiles(fileUrls, zipName='') {
+        var zip = new JSZip();
+        zip.zipFiles(fileUrls, zipName);
+        return zip;
+    }
+
     //FIXME: this is basically zipFiles with custom error handlers, just extend zipFiles to allow for fallback urls
     /**
      * @deprecated
@@ -1252,279 +1565,139 @@
             );
 
             // if not a proxyUrl, try to use a proxy
-            if (!isDdgUrl(res.finalUrl || res.url)) {
+            if (!PProxy.DDG.test(res.finalUrl || res.url)) {
                 console.debug(
                     'retrying with ddgproxy',
-                    '\nddgpURL:', ddgProxy(fileUrl),
+                    // '\nddgpURL:', ddgProxy(fileUrl),
                     '\nfileURL:', fileUrl,
                     '\nresponse.finalURL:', res.finalUrl
                 );
 
-                // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-                const [fullMatch, mimeType1, mimeType2] = res.responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-                const contentType = [mimeType1, mimeType2].join('/');
+                const mimeType1 = res.headers['content-type'].split('/')[0];
+                const fileExtension = contentTypeToFileExtension(res.headers['content-type']);
+
+                const blob = new Blob([res.response], {type: res.headers['content-type']});
+
                 if (/(<!DOCTYPE)|(<html)/.test(res.responseText) || !/image/i.test(mimeType1)) {
                     console.error('Not image data!', res.responseText);
                     return false;
                 }
-                //FIXME: you can't call this here
+
                 //TODO: make it possible to enqueue more files to a zip that's already working
-                requestAndZipFile(ddgProxy(fileUrl), fileName);
+                this.requestAndZip(ddgProxy(fileUrl), fileName);
             } else { // if is a proxy url and it failed, just give up
                 return true;
             }
         });
     }
+
+
+    //TODO: create type: Downloadable or DFile (download file)
     /**
+     * extract name and url from the file object
      *
-     * @param fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
-     *  if empty, will use images matching this selector by default: "img.img-big"
+     * @param {Object|string} file - object or URL string
+     * @returns {Downloadable}
      *
-     *   file.fileURL = file.fileURL || file.fileUrl || file.url || file.src || file.href;
-     *   file.fileName = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
-     * @param zipName
-     * @return {JSZip}
+     *   file.url = file.fileURL || file.fileUrl || file.url || file.src || file.href;
+     *   file.name = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
      */
-    function zipFiles(fileUrls, zipName = '') {
-        const zip = new JSZip();
-        zip.zipName = (zipName ? zipName : document.title).replace(/\//g, ' ');
-        var pb = zip.progressBar; // init progressBar
-        zip.xhrList = [];
+    function normalizeFile(file) {
+        if (!file) return {};
 
-        /**
-         * extract name and url from
-         * @param {Object|string} file
-         * @returns {({fileURL, fileName})}
-         */
-        const normalizeFile = file => {
-            if (!file) return;
-            if (typeof file === 'string') { // if string
-                //TODO: name is never specified here
-                return {
-                    fileURL: file,
-                    fileName: nameFile(file) || 'untitled.unkownformat.gif'
-                };
-            }
+        const dFile = {};
+        var url = '';
 
-            function getFirstProperty(o, properties) {
+        if (typeof file === 'string') { // if string
+            //TODO: name is never specified here
+            url = file;
+            file = {};
+        }
+
+        function getFirstProperty(o, properties) {
                 if (!o) return null;
                 for (const p of properties) {
                     if (o[p])
                         return o[p];
-                }
             }
-
-            return {
-                fileURL: getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']),
-                fileName: getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.fileURL) || 'Untitled',
-            };
-        };
-
-        const files = Array.from(fileUrls ? fileUrls : document.querySelectorAll('img.img-big'))
-            .map(normalizeFile)
-            .filter(file => !!file);
-        zip.zipTotal = files.length;
-
-        window.addEventListener('beforeunload', zipBeforeUnload);
-        console.log('zipping files:', files);
-
-        for (const file of files)
-            try {
-                const xhr = requestAndZipFile(file.fileURL, file.fileName);
-                zip.xhrList.push(xhr);
-            } catch (r) {
-                console.error(r);
-            }
-
-
-        /**
-         * Requests the image and adds it to the local zip
-         * @param fileUrl
-         * @param fileName
-         * @param onBadResponse function(response): a function which is passed the response in both onload and onerror
-         */
-        function requestAndZipFile(fileUrl, fileName, onBadResponse = () => null) {
-            var fileSize = 0;
-            zip.loadedLast = 0;
-            zip.activeZipThreads++;
-
-            fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
-
-            var xhr;
-
-            xhr = GM_xmlhttpRequest({
-                method: 'GET',
-                url: fileUrl,
-                responseType: 'arraybuffer',
-                binary: true,
-                onload: function (res) {
-                    if (zip.file(fileName)) {
-                        console.warn('ZIP already contains the file: ', fileName);
-                        return;
-                    }
-
-                    res && console.debug(
-                        'onload:' +
-                        '\nreadyState:', res.readyState,
-                        '\nresponseHeaders:', res.responseHeaders,
-                        '\nstatus:', res.status,
-                        '\nstatusText:', res.statusText,
-                        '\nfinalUrl:', res.finalUrl,
-                        '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
-                    );
-
-                    if (onBadResponse(res, fileUrl)) {
-                        zip.current++;
-                        return;
-                    }
-                    // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-                    const [fullMatch, mimeType1, mimeType2] = res.responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-                    const contentType = [mimeType1, mimeType2].join('/');
-                    const blob = new Blob([res.response], {type: contentType});
-                    const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
-                        unsafeWindow.mimeTypes[contentType].extensions[0] :
-                        mimeType2;
-
-                    console.debug('contentType:', contentType);
-                    zip.file(`${fileName.trim()}_${zip.current + 1}.${fileExtension}`, blob);
-                    console.log('Added file to zip:', fileName, fileUrl);
-                    zip.responseBlobs.add(blob);
-                    zip.current++;
-
-                    // if finished, stop
-                    if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
-                        return;
-                    }
-
-                    // Completed!
-                    if (zip.current >= zip.zipTotal - 1) {
-                        console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
-                        zip.zipTotal = -1;
-                        if (zip.progressBar)
-                            zip.progressBar.destroy();
-                        zip.genZip();
-                    }
-                    zip.activeZipThreads--;
-                },
-                onreadystatechange: function (res) {
-                    console.debug('Request state changed to: ' + res.readyState);
-                    if (res.readyState === 4) {
-                        console.debug('ret.readyState === 4');
-                    }
-                },
-                onerror: function (res) {
-                    if (onBadResponse(res, fileUrl)) {
-                        return;
-                    }
-
-                    console.error('An error occurred.',
-                        '\nreadyState: ', res.readyState,
-                        '\nresponseHeaders: ', res.responseHeaders,
-                        '\nstatus: ', res.status,
-                        '\nstatusText: ', res.statusText,
-                        '\nfinalUrl: ', res.finalUrl,
-                        '\nresponseText: ', res.responseText,
-                    );
-                    zip.activeZipThreads--;
-                },
-                onprogress: function (res) {
-
-                    // FIXME: fix abort condition, when should it abort?
-                    const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
-                    if (abortCondition && false) {
-                        if (xhr.abort) {
-                            xhr.abort();
-                            console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
-                        } else
-                            console.error('xhr.abort not defined');
-                        return;
-                    }
-
-                    if (res.lengthComputable) {
-                        if (fileSize === 0) { // happens once
-                            fileSize = res.total;
-                            zip.totalSize += fileSize;
-                        }
-                        const loadedSoFar = res.loaded;
-                        const justLoaded = loadedSoFar - zip.loadedLast;    // What has been added since the last progress call
-                        const fileprogress = loadedSoFar / res.total;   //
-
-                        zip.totalLoaded += justLoaded;
-                        const totalProgress = zip.totalLoaded / zip.totalSize;
-
-                        console.debug(
-                            'loadedSoFar:', res.loaded,
-                            '\njustLoaded:', loadedSoFar - zip.loadedLast,
-                            '\nfileprogress:', fileprogress
-                        );
-
-                        const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
-                        if (typeof progressBar !== 'undefined' && zip.progressBar) {
-                            zip.progressBar.set(totalProgress);
-                            zip.progressBar.setText(progressText);
-                        } else {
-                            var progressbarContainer;
-                            if ((progressbarContainer = document.querySelector('#progressbar-cotnainer'))) {
-                                progressbarContainer.innerText = progressText;
-                            }
-                        }
-
-                        zip.loadedLast = loadedSoFar;
-                    }
-                }
-            });
-            //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
-            return xhr;
         }
 
-        // give access to the zip variable by adding it to the global object
-        console.log(
-            `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
-        );
-        unsafeWindow.zips.push(zip);
+        url = url || getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
 
-        //TODO: this should return a promise of when all the files have been zipped,
-        //          this can be done using Promise.all(zip.xhrList)
-        return zip;
+        dFile.url = tryToGetBigImageUrl(url);
+        dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
+
+
+        dFile.fileExtension = getFileExtension(dFile.name);
+        if(!dFile.fileExtension){
+            dFile.fileExtension = getFileExtension(url);
+            dFile.name += dFile.fileExtension;
+        }
+
+        dFile.name = cleanFileName(dFile.name);
+
+        return dFile;
     }
 
+
     function setupProgressBar() {
-        const pbHeader = createElement(`<header id="progressbar-container"/>`);
-        if (!document.querySelector('#progressbar-container')) {
-            document.body.firstElementChild.before(pbHeader);
-        }
-
-        // noinspection JSUnresolvedVariable
-        if (typeof (ProgressBar) == 'undefined') {
-            console.error('ProgressBar.js is not defined.');
-            return;
-        }
-
-        // noinspection JSUnresolvedVariable
-        var progressBar = new ProgressBar.Line('#progressbar-container', {
-            easing: 'easeInOut',
-            color: '#FCB03C',
-            strokeWidth: 1,
-            trailWidth: 1,
-            text: {
-                value: '0'
-            }
+        const container = document.createElement('div');
+        const $container = $(container).attr({
+            'id': 'progressbar-container'
+        }).addClass('progressbar-container').css({
+            'position': 'fixed',
+            'top': '0',
+            'left': '0',
+            'width': '100%',
+            // 'height': '100%',
+            'min-height': '30px',
+            'padding': '10px 0',
+            'background-color': '#36465d',
+            'box-shadow': '0 0 0 1px hsla(0,0%,100%,.13)',
+            'z-index': '999999999'
         });
 
-        pbHeader.style.position = 'fixed';
-        pbHeader.style.top = '0';
-        pbHeader.style.left = '0';
-        pbHeader.style.width = '100%';
-        pbHeader.style['min-height'] = '30px';
-        pbHeader.style.padding = '10px 0';
-        pbHeader.style['background-color'] = '#36465d';
-        pbHeader.style['box-shadow'] = '0 0 0 1px hsla(0,0%,100%,.13)';
-        pbHeader.style['z-index'] = '100';
+        document.body.firstElementChild.before(container);
+
+        if (typeof (ProgressBar) === 'undefined') {
+            console.error('ProgressBar.js is not defined.');
+            return {};
+        }
+
+        // noinspection JSUnresolvedVariable
+        const progressBar = new ProgressBar.Line(container, {
+            strokeWidth: 4,
+            easing: 'easeInOut',
+            duration: 1400,
+            color: '#FCB03C',
+            trailColor: '#eee',
+            trailWidth: 1,
+            svgStyle: {width: '100%', height: '100%'},
+            text: {
+                value: '0',
+                style: {
+                    // color: '#999',// Default: same as stroke color (options.color)
+                    display: 'inline',
+                    position: 'relative',
+                    right: '0',
+                    top: '30px',
+                    padding: 0,
+                    margin: 0,
+                    transform: null
+                },
+                alignToBottom: false,
+                autoStyleContainer: false,
+            },
+            from: {color: '#FFEA82'},
+            to: {color: '#ED6A5A'},
+            step: (state, bar) => {
+                // bar.setText(Math.round(bar.value() * 100) + ' %');
+            },
+        });
+        console.log('progressBar:', progressBar);
 
         progressBar.set(0);
-        const progressbarText = document.querySelector('.progressbar-text');
-        progressbarText.style.display = 'inline';
-        progressbarText.style.position = 'relative';
+
         return progressBar;
     }
 
@@ -1608,13 +1781,13 @@
     }
 
     function getFilenameSimple(url) {
-        if (url) {
+        if (!url)
+            return '';
+
             var m = url.toString().match(/.*\/(.+?)\./);
             if (m && m.length > 1) {
                 return m[1];
             }
-        } else
-            return '';
     }
 
     function getNameFromElement(element) {
@@ -1631,8 +1804,6 @@
     unsafeWindow.setNameFilesByNumber = setNameFilesByNumber;
     unsafeWindow.download = download;
     unsafeWindow.GM_download = GM_download;
-    unsafeWindow.downloadBatch = downloadBatch;
-    unsafeWindow.downloadImageBatch = downloadImageBatch;
     unsafeWindow.getFileExtension = getFileExtension;
     unsafeWindow.nameFile = nameFile;
     unsafeWindow.makeTextFile = makeTextFile;
@@ -1646,28 +1817,9 @@
     unsafeWindow.GM_downloadPromise = GM_downloadPromise;
     unsafeWindow.GM_xmlhttpRequestPromise = GM_xmlhttpRequestPromise;
 
-    // exposeSymbols([
-    //     'JSZip',
-    //     'setNameFilesByNumber',
-    //     'download',
-    //     'GM_download',
-    //     'downloadBatch',
-    //     'downloadImageBatch',
-    //     'getFileExtension',
-    //     'nameFile',
-    //     'makeTextFile',
-    //     'anchorClick',
-    //     'saveByAnchor',
-    //     'zipFiles',
-    //     'zipImages',
-    //     'storeDownloadHistory',
-    //     'GM_fetch',
-    //     'GM_xmlhttpRequest',
-    //     'GM_downloadPromise',
-    //     'GM_xmlhttpRequestPromise',
-    // ], this);
     unsafeWindow.MAIN_DIRECTORY = Config.MAIN_DIRECTORY;
 
+    // FIXME: doesn't work
     function exposeSymbols(symbols, root = this, override = false) {
         for (const symbol of symbols) {
             if (!root) {
@@ -1684,3 +1836,8 @@
     }
 
 })();
+
+
+// ProgressBar.js
+!function(a){if("object"==typeof exports&&"undefined"!=typeof module)module.exports=a();else if("function"==typeof define&&define.amd)define([],a);else{var b;b="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof self?self:this,b.ProgressBar=a()}}(function(){var a;return function a(b,c,d){function e(g,h){if(!c[g]){if(!b[g]){var i="function"==typeof require&&require;if(!h&&i)return i(g,!0);if(f)return f(g,!0);var j=new Error("Cannot find module '"+g+"'");throw j.code="MODULE_NOT_FOUND",j}var k=c[g]={exports:{}};b[g][0].call(k.exports,function(a){var c=b[g][1][a];return e(c?c:a)},k,k.exports,a,b,c,d)}return c[g].exports}for(var f="function"==typeof require&&require,g=0;g<d.length;g++)e(d[g]);return e}({1:[function(b,c,d){(function(){var b=this||Function("return this")(),e=function(){"use strict";function e(){}function f(a,b){var c;for(c in a)Object.hasOwnProperty.call(a,c)&&b(c)}function g(a,b){return f(b,function(c){a[c]=b[c]}),a}function h(a,b){f(b,function(c){"undefined"==typeof a[c]&&(a[c]=b[c])})}function i(a,b,c,d,e,f,g){var h,i,k,l=a<f?0:(a-f)/e;for(h in b)b.hasOwnProperty(h)&&(i=g[h],k="function"==typeof i?i:o[i],b[h]=j(c[h],d[h],k,l));return b}function j(a,b,c,d){return a+(b-a)*c(d)}function k(a,b){var c=n.prototype.filter,d=a._filterArgs;f(c,function(e){"undefined"!=typeof c[e][b]&&c[e][b].apply(a,d)})}function l(a,b,c,d,e,f,g,h,j,l,m){v=b+c+d,w=Math.min(m||u(),v),x=w>=v,y=d-(v-w),a.isPlaying()&&(x?(j(g,a._attachment,y),a.stop(!0)):(a._scheduleId=l(a._timeoutHandler,s),k(a,"beforeTween"),w<b+c?i(1,e,f,g,1,1,h):i(w,e,f,g,d,b+c,h),k(a,"afterTween"),j(e,a._attachment,y)))}function m(a,b){var c={},d=typeof b;return"string"===d||"function"===d?f(a,function(a){c[a]=b}):f(a,function(a){c[a]||(c[a]=b[a]||q)}),c}function n(a,b){this._currentState=a||{},this._configured=!1,this._scheduleFunction=p,"undefined"!=typeof b&&this.setConfig(b)}var o,p,q="linear",r=500,s=1e3/60,t=Date.now?Date.now:function(){return+new Date},u="undefined"!=typeof SHIFTY_DEBUG_NOW?SHIFTY_DEBUG_NOW:t;p="undefined"!=typeof window?window.requestAnimationFrame||window.webkitRequestAnimationFrame||window.oRequestAnimationFrame||window.msRequestAnimationFrame||window.mozCancelRequestAnimationFrame&&window.mozRequestAnimationFrame||setTimeout:setTimeout;var v,w,x,y;return n.prototype.tween=function(a){return this._isTweening?this:(void 0===a&&this._configured||this.setConfig(a),this._timestamp=u(),this._start(this.get(),this._attachment),this.resume())},n.prototype.setConfig=function(a){a=a||{},this._configured=!0,this._attachment=a.attachment,this._pausedAtTime=null,this._scheduleId=null,this._delay=a.delay||0,this._start=a.start||e,this._step=a.step||e,this._finish=a.finish||e,this._duration=a.duration||r,this._currentState=g({},a.from||this.get()),this._originalState=this.get(),this._targetState=g({},a.to||this.get());var b=this;this._timeoutHandler=function(){l(b,b._timestamp,b._delay,b._duration,b._currentState,b._originalState,b._targetState,b._easing,b._step,b._scheduleFunction)};var c=this._currentState,d=this._targetState;return h(d,c),this._easing=m(c,a.easing||q),this._filterArgs=[c,this._originalState,d,this._easing],k(this,"tweenCreated"),this},n.prototype.get=function(){return g({},this._currentState)},n.prototype.set=function(a){this._currentState=a},n.prototype.pause=function(){return this._pausedAtTime=u(),this._isPaused=!0,this},n.prototype.resume=function(){return this._isPaused&&(this._timestamp+=u()-this._pausedAtTime),this._isPaused=!1,this._isTweening=!0,this._timeoutHandler(),this},n.prototype.seek=function(a){a=Math.max(a,0);var b=u();return this._timestamp+a===0?this:(this._timestamp=b-a,this.isPlaying()||(this._isTweening=!0,this._isPaused=!1,l(this,this._timestamp,this._delay,this._duration,this._currentState,this._originalState,this._targetState,this._easing,this._step,this._scheduleFunction,b),this.pause()),this)},n.prototype.stop=function(a){return this._isTweening=!1,this._isPaused=!1,this._timeoutHandler=e,(b.cancelAnimationFrame||b.webkitCancelAnimationFrame||b.oCancelAnimationFrame||b.msCancelAnimationFrame||b.mozCancelRequestAnimationFrame||b.clearTimeout)(this._scheduleId),a&&(k(this,"beforeTween"),i(1,this._currentState,this._originalState,this._targetState,1,0,this._easing),k(this,"afterTween"),k(this,"afterTweenEnd"),this._finish.call(this,this._currentState,this._attachment)),this},n.prototype.isPlaying=function(){return this._isTweening&&!this._isPaused},n.prototype.setScheduleFunction=function(a){this._scheduleFunction=a},n.prototype.dispose=function(){var a;for(a in this)this.hasOwnProperty(a)&&delete this[a]},n.prototype.filter={},n.prototype.formula={linear:function(a){return a}},o=n.prototype.formula,g(n,{now:u,each:f,tweenProps:i,tweenProp:j,applyFilter:k,shallowCopy:g,defaults:h,composeEasingObject:m}),"function"==typeof SHIFTY_DEBUG_NOW&&(b.timeoutHandler=l),"object"==typeof d?c.exports=n:"function"==typeof a&&a.amd?a(function(){return n}):"undefined"==typeof b.Tweenable&&(b.Tweenable=n),n}();!function(){e.shallowCopy(e.prototype.formula,{easeInQuad:function(a){return Math.pow(a,2)},easeOutQuad:function(a){return-(Math.pow(a-1,2)-1)},easeInOutQuad:function(a){return(a/=.5)<1?.5*Math.pow(a,2):-.5*((a-=2)*a-2)},easeInCubic:function(a){return Math.pow(a,3)},easeOutCubic:function(a){return Math.pow(a-1,3)+1},easeInOutCubic:function(a){return(a/=.5)<1?.5*Math.pow(a,3):.5*(Math.pow(a-2,3)+2)},easeInQuart:function(a){return Math.pow(a,4)},easeOutQuart:function(a){return-(Math.pow(a-1,4)-1)},easeInOutQuart:function(a){return(a/=.5)<1?.5*Math.pow(a,4):-.5*((a-=2)*Math.pow(a,3)-2)},easeInQuint:function(a){return Math.pow(a,5)},easeOutQuint:function(a){return Math.pow(a-1,5)+1},easeInOutQuint:function(a){return(a/=.5)<1?.5*Math.pow(a,5):.5*(Math.pow(a-2,5)+2)},easeInSine:function(a){return-Math.cos(a*(Math.PI/2))+1},easeOutSine:function(a){return Math.sin(a*(Math.PI/2))},easeInOutSine:function(a){return-.5*(Math.cos(Math.PI*a)-1)},easeInExpo:function(a){return 0===a?0:Math.pow(2,10*(a-1))},easeOutExpo:function(a){return 1===a?1:-Math.pow(2,-10*a)+1},easeInOutExpo:function(a){return 0===a?0:1===a?1:(a/=.5)<1?.5*Math.pow(2,10*(a-1)):.5*(-Math.pow(2,-10*--a)+2)},easeInCirc:function(a){return-(Math.sqrt(1-a*a)-1)},easeOutCirc:function(a){return Math.sqrt(1-Math.pow(a-1,2))},easeInOutCirc:function(a){return(a/=.5)<1?-.5*(Math.sqrt(1-a*a)-1):.5*(Math.sqrt(1-(a-=2)*a)+1)},easeOutBounce:function(a){return a<1/2.75?7.5625*a*a:a<2/2.75?7.5625*(a-=1.5/2.75)*a+.75:a<2.5/2.75?7.5625*(a-=2.25/2.75)*a+.9375:7.5625*(a-=2.625/2.75)*a+.984375},easeInBack:function(a){var b=1.70158;return a*a*((b+1)*a-b)},easeOutBack:function(a){var b=1.70158;return(a-=1)*a*((b+1)*a+b)+1},easeInOutBack:function(a){var b=1.70158;return(a/=.5)<1?.5*(a*a*(((b*=1.525)+1)*a-b)):.5*((a-=2)*a*(((b*=1.525)+1)*a+b)+2)},elastic:function(a){return-1*Math.pow(4,-8*a)*Math.sin((6*a-1)*(2*Math.PI)/2)+1},swingFromTo:function(a){var b=1.70158;return(a/=.5)<1?.5*(a*a*(((b*=1.525)+1)*a-b)):.5*((a-=2)*a*(((b*=1.525)+1)*a+b)+2)},swingFrom:function(a){var b=1.70158;return a*a*((b+1)*a-b)},swingTo:function(a){var b=1.70158;return(a-=1)*a*((b+1)*a+b)+1},bounce:function(a){return a<1/2.75?7.5625*a*a:a<2/2.75?7.5625*(a-=1.5/2.75)*a+.75:a<2.5/2.75?7.5625*(a-=2.25/2.75)*a+.9375:7.5625*(a-=2.625/2.75)*a+.984375},bouncePast:function(a){return a<1/2.75?7.5625*a*a:a<2/2.75?2-(7.5625*(a-=1.5/2.75)*a+.75):a<2.5/2.75?2-(7.5625*(a-=2.25/2.75)*a+.9375):2-(7.5625*(a-=2.625/2.75)*a+.984375)},easeFromTo:function(a){return(a/=.5)<1?.5*Math.pow(a,4):-.5*((a-=2)*Math.pow(a,3)-2)},easeFrom:function(a){return Math.pow(a,4)},easeTo:function(a){return Math.pow(a,.25)}})}(),function(){function a(a,b,c,d,e,f){function g(a){return((n*a+o)*a+p)*a}function h(a){return((q*a+r)*a+s)*a}function i(a){return(3*n*a+2*o)*a+p}function j(a){return 1/(200*a)}function k(a,b){return h(m(a,b))}function l(a){return a>=0?a:0-a}function m(a,b){var c,d,e,f,h,j;for(e=a,j=0;j<8;j++){if(f=g(e)-a,l(f)<b)return e;if(h=i(e),l(h)<1e-6)break;e-=f/h}if(c=0,d=1,e=a,e<c)return c;if(e>d)return d;for(;c<d;){if(f=g(e),l(f-a)<b)return e;a>f?c=e:d=e,e=.5*(d-c)+c}return e}var n=0,o=0,p=0,q=0,r=0,s=0;return p=3*b,o=3*(d-b)-p,n=1-p-o,s=3*c,r=3*(e-c)-s,q=1-s-r,k(a,j(f))}function b(b,c,d,e){return function(f){return a(f,b,c,d,e,1)}}e.setBezierFunction=function(a,c,d,f,g){var h=b(c,d,f,g);return h.displayName=a,h.x1=c,h.y1=d,h.x2=f,h.y2=g,e.prototype.formula[a]=h},e.unsetBezierFunction=function(a){delete e.prototype.formula[a]}}(),function(){function a(a,b,c,d,f,g){return e.tweenProps(d,b,a,c,1,g,f)}var b=new e;b._filterArgs=[],e.interpolate=function(c,d,f,g,h){var i=e.shallowCopy({},c),j=h||0,k=e.composeEasingObject(c,g||"linear");b.set({});var l=b._filterArgs;l.length=0,l[0]=i,l[1]=c,l[2]=d,l[3]=k,e.applyFilter(b,"tweenCreated"),e.applyFilter(b,"beforeTween");var m=a(c,i,d,f,k,j);return e.applyFilter(b,"afterTween"),m}}(),function(a){function b(a,b){var c,d=[],e=a.length;for(c=0;c<e;c++)d.push("_"+b+"_"+c);return d}function c(a){var b=a.match(v);return b?(1===b.length||a.charAt(0).match(u))&&b.unshift(""):b=["",""],b.join(A)}function d(b){a.each(b,function(a){var c=b[a];"string"==typeof c&&c.match(z)&&(b[a]=e(c))})}function e(a){return i(z,a,f)}function f(a){var b=g(a);return"rgb("+b[0]+","+b[1]+","+b[2]+")"}function g(a){return a=a.replace(/#/,""),3===a.length&&(a=a.split(""),a=a[0]+a[0]+a[1]+a[1]+a[2]+a[2]),B[0]=h(a.substr(0,2)),B[1]=h(a.substr(2,2)),B[2]=h(a.substr(4,2)),B}function h(a){return parseInt(a,16)}function i(a,b,c){var d=b.match(a),e=b.replace(a,A);if(d)for(var f,g=d.length,h=0;h<g;h++)f=d.shift(),e=e.replace(A,c(f));return e}function j(a){return i(x,a,k)}function k(a){for(var b=a.match(w),c=b.length,d=a.match(y)[0],e=0;e<c;e++)d+=parseInt(b[e],10)+",";return d=d.slice(0,-1)+")"}function l(d){var e={};return a.each(d,function(a){var f=d[a];if("string"==typeof f){var g=r(f);e[a]={formatString:c(f),chunkNames:b(g,a)}}}),e}function m(b,c){a.each(c,function(a){for(var d=b[a],e=r(d),f=e.length,g=0;g<f;g++)b[c[a].chunkNames[g]]=+e[g];delete b[a]})}function n(b,c){a.each(c,function(a){var d=b[a],e=o(b,c[a].chunkNames),f=p(e,c[a].chunkNames);d=q(c[a].formatString,f),b[a]=j(d)})}function o(a,b){for(var c,d={},e=b.length,f=0;f<e;f++)c=b[f],d[c]=a[c],delete a[c];return d}function p(a,b){C.length=0;for(var c=b.length,d=0;d<c;d++)C.push(a[b[d]]);return C}function q(a,b){for(var c=a,d=b.length,e=0;e<d;e++)c=c.replace(A,+b[e].toFixed(4));return c}function r(a){return a.match(w)}function s(b,c){a.each(c,function(a){var d,e=c[a],f=e.chunkNames,g=f.length,h=b[a];if("string"==typeof h){var i=h.split(" "),j=i[i.length-1];for(d=0;d<g;d++)b[f[d]]=i[d]||j}else for(d=0;d<g;d++)b[f[d]]=h;delete b[a]})}function t(b,c){a.each(c,function(a){var d=c[a],e=d.chunkNames,f=e.length,g=b[e[0]],h=typeof g;if("string"===h){for(var i="",j=0;j<f;j++)i+=" "+b[e[j]],delete b[e[j]];b[a]=i.substr(1)}else b[a]=g})}var u=/(\d|\-|\.)/,v=/([^\-0-9\.]+)/g,w=/[0-9.\-]+/g,x=new RegExp("rgb\\("+w.source+/,\s*/.source+w.source+/,\s*/.source+w.source+"\\)","g"),y=/^.*\(/,z=/#([0-9]|[a-f]){3,6}/gi,A="VAL",B=[],C=[];a.prototype.filter.token={tweenCreated:function(a,b,c,e){d(a),d(b),d(c),this._tokenData=l(a)},beforeTween:function(a,b,c,d){s(d,this._tokenData),m(a,this._tokenData),m(b,this._tokenData),m(c,this._tokenData)},afterTween:function(a,b,c,d){n(a,this._tokenData),n(b,this._tokenData),n(c,this._tokenData),t(d,this._tokenData)}}}(e)}).call(null)},{}],2:[function(a,b,c){var d=a("./shape"),e=a("./utils"),f=function(a,b){this._pathTemplate="M 50,50 m 0,-{radius} a {radius},{radius} 0 1 1 0,{2radius} a {radius},{radius} 0 1 1 0,-{2radius}",this.containerAspectRatio=1,d.apply(this,arguments)};f.prototype=new d,f.prototype.constructor=f,f.prototype._pathString=function(a){var b=a.strokeWidth;a.trailWidth&&a.trailWidth>a.strokeWidth&&(b=a.trailWidth);var c=50-b/2;return e.render(this._pathTemplate,{radius:c,"2radius":2*c})},f.prototype._trailString=function(a){return this._pathString(a)},b.exports=f},{"./shape":7,"./utils":9}],3:[function(a,b,c){var d=a("./shape"),e=a("./utils"),f=function(a,b){this._pathTemplate="M 0,{center} L 100,{center}",d.apply(this,arguments)};f.prototype=new d,f.prototype.constructor=f,f.prototype._initializeSvg=function(a,b){a.setAttribute("viewBox","0 0 100 "+b.strokeWidth),a.setAttribute("preserveAspectRatio","none")},f.prototype._pathString=function(a){return e.render(this._pathTemplate,{center:a.strokeWidth/2})},f.prototype._trailString=function(a){return this._pathString(a)},b.exports=f},{"./shape":7,"./utils":9}],4:[function(a,b,c){b.exports={Line:a("./line"),Circle:a("./circle"),SemiCircle:a("./semicircle"),Square:a("./square"),Path:a("./path"),Shape:a("./shape"),utils:a("./utils")}},{"./circle":2,"./line":3,"./path":5,"./semicircle":6,"./shape":7,"./square":8,"./utils":9}],5:[function(a,b,c){var d=a("shifty"),e=a("./utils"),f={easeIn:"easeInCubic",easeOut:"easeOutCubic",easeInOut:"easeInOutCubic"},g=function a(b,c){if(!(this instanceof a))throw new Error("Constructor was called without new keyword");c=e.extend({duration:800,easing:"linear",from:{},to:{},step:function(){}},c);var d;d=e.isString(b)?document.querySelector(b):b,this.path=d,this._opts=c,this._tweenable=null;var f=this.path.getTotalLength();this.path.style.strokeDasharray=f+" "+f,this.set(0)};g.prototype.value=function(){var a=this._getComputedDashOffset(),b=this.path.getTotalLength(),c=1-a/b;return parseFloat(c.toFixed(6),10)},g.prototype.set=function(a){this.stop(),this.path.style.strokeDashoffset=this._progressToOffset(a);var b=this._opts.step;if(e.isFunction(b)){var c=this._easing(this._opts.easing),d=this._calculateTo(a,c),f=this._opts.shape||this;b(d,f,this._opts.attachment)}},g.prototype.stop=function(){this._stopTween(),this.path.style.strokeDashoffset=this._getComputedDashOffset()},g.prototype.animate=function(a,b,c){b=b||{},e.isFunction(b)&&(c=b,b={});var f=e.extend({},b),g=e.extend({},this._opts);b=e.extend(g,b);var h=this._easing(b.easing),i=this._resolveFromAndTo(a,h,f);this.stop(),this.path.getBoundingClientRect();var j=this._getComputedDashOffset(),k=this._progressToOffset(a),l=this;this._tweenable=new d,this._tweenable.tween({from:e.extend({offset:j},i.from),to:e.extend({offset:k},i.to),duration:b.duration,easing:h,step:function(a){l.path.style.strokeDashoffset=a.offset;var c=b.shape||l;b.step(a,c,b.attachment)},finish:function(a){e.isFunction(c)&&c()}})},g.prototype._getComputedDashOffset=function(){var a=window.getComputedStyle(this.path,null);return parseFloat(a.getPropertyValue("stroke-dashoffset"),10)},g.prototype._progressToOffset=function(a){var b=this.path.getTotalLength();return b-a*b},g.prototype._resolveFromAndTo=function(a,b,c){return c.from&&c.to?{from:c.from,to:c.to}:{from:this._calculateFrom(b),to:this._calculateTo(a,b)}},g.prototype._calculateFrom=function(a){return d.interpolate(this._opts.from,this._opts.to,this.value(),a)},g.prototype._calculateTo=function(a,b){return d.interpolate(this._opts.from,this._opts.to,a,b)},g.prototype._stopTween=function(){null!==this._tweenable&&(this._tweenable.stop(),this._tweenable=null)},g.prototype._easing=function(a){return f.hasOwnProperty(a)?f[a]:a},b.exports=g},{"./utils":9,shifty:1}],6:[function(a,b,c){var d=a("./shape"),e=a("./circle"),f=a("./utils"),g=function(a,b){this._pathTemplate="M 50,50 m -{radius},0 a {radius},{radius} 0 1 1 {2radius},0",this.containerAspectRatio=2,d.apply(this,arguments)};g.prototype=new d,g.prototype.constructor=g,g.prototype._initializeSvg=function(a,b){a.setAttribute("viewBox","0 0 100 50")},g.prototype._initializeTextContainer=function(a,b,c){a.text.style&&(c.style.top="auto",c.style.bottom="0",a.text.alignToBottom?f.setStyle(c,"transform","translate(-50%, 0)"):f.setStyle(c,"transform","translate(-50%, 50%)"))},g.prototype._pathString=e.prototype._pathString,g.prototype._trailString=e.prototype._trailString,b.exports=g},{"./circle":2,"./shape":7,"./utils":9}],7:[function(a,b,c){var d=a("./path"),e=a("./utils"),f="Object is destroyed",g=function a(b,c){if(!(this instanceof a))throw new Error("Constructor was called without new keyword");if(0!==arguments.length){this._opts=e.extend({color:"#555",strokeWidth:1,trailColor:null,trailWidth:null,fill:null,text:{style:{color:null,position:"absolute",left:"50%",top:"50%",padding:0,margin:0,transform:{prefix:!0,value:"translate(-50%, -50%)"}},autoStyleContainer:!0,alignToBottom:!0,value:null,className:"progressbar-text"},svgStyle:{display:"block",width:"100%"},warnings:!1},c,!0),e.isObject(c)&&void 0!==c.svgStyle&&(this._opts.svgStyle=c.svgStyle),e.isObject(c)&&e.isObject(c.text)&&void 0!==c.text.style&&(this._opts.text.style=c.text.style);var f,g=this._createSvgView(this._opts);if(f=e.isString(b)?document.querySelector(b):b,!f)throw new Error("Container does not exist: "+b);this._container=f,this._container.appendChild(g.svg),this._opts.warnings&&this._warnContainerAspectRatio(this._container),this._opts.svgStyle&&e.setStyles(g.svg,this._opts.svgStyle),this.svg=g.svg,this.path=g.path,this.trail=g.trail,this.text=null;var h=e.extend({attachment:void 0,shape:this},this._opts);this._progressPath=new d(g.path,h),e.isObject(this._opts.text)&&null!==this._opts.text.value&&this.setText(this._opts.text.value)}};g.prototype.animate=function(a,b,c){if(null===this._progressPath)throw new Error(f);this._progressPath.animate(a,b,c)},g.prototype.stop=function(){if(null===this._progressPath)throw new Error(f);void 0!==this._progressPath&&this._progressPath.stop()},g.prototype.destroy=function(){if(null===this._progressPath)throw new Error(f);this.stop(),this.svg.parentNode.removeChild(this.svg),this.svg=null,this.path=null,this.trail=null,this._progressPath=null,null!==this.text&&(this.text.parentNode.removeChild(this.text),this.text=null)},g.prototype.set=function(a){if(null===this._progressPath)throw new Error(f);this._progressPath.set(a)},g.prototype.value=function(){if(null===this._progressPath)throw new Error(f);return void 0===this._progressPath?0:this._progressPath.value()},g.prototype.setText=function(a){if(null===this._progressPath)throw new Error(f);null===this.text&&(this.text=this._createTextContainer(this._opts,this._container),this._container.appendChild(this.text)),e.isObject(a)?(e.removeChildren(this.text),this.text.appendChild(a)):this.text.innerHTML=a},g.prototype._createSvgView=function(a){var b=document.createElementNS("http://www.w3.org/2000/svg","svg");this._initializeSvg(b,a);var c=null;(a.trailColor||a.trailWidth)&&(c=this._createTrail(a),b.appendChild(c));var d=this._createPath(a);return b.appendChild(d),{svg:b,path:d,trail:c}},g.prototype._initializeSvg=function(a,b){a.setAttribute("viewBox","0 0 100 100")},g.prototype._createPath=function(a){var b=this._pathString(a);return this._createPathElement(b,a)},g.prototype._createTrail=function(a){var b=this._trailString(a),c=e.extend({},a);return c.trailColor||(c.trailColor="#eee"),c.trailWidth||(c.trailWidth=c.strokeWidth),c.color=c.trailColor,c.strokeWidth=c.trailWidth,c.fill=null,this._createPathElement(b,c)},g.prototype._createPathElement=function(a,b){var c=document.createElementNS("http://www.w3.org/2000/svg","path");return c.setAttribute("d",a),c.setAttribute("stroke",b.color),c.setAttribute("stroke-width",b.strokeWidth),b.fill?c.setAttribute("fill",b.fill):c.setAttribute("fill-opacity","0"),c},g.prototype._createTextContainer=function(a,b){var c=document.createElement("div");c.className=a.text.className;var d=a.text.style;return d&&(a.text.autoStyleContainer&&(b.style.position="relative"),e.setStyles(c,d),d.color||(c.style.color=a.color)),this._initializeTextContainer(a,b,c),c},g.prototype._initializeTextContainer=function(a,b,c){},g.prototype._pathString=function(a){throw new Error("Override this function for each progress bar")},g.prototype._trailString=function(a){throw new Error("Override this function for each progress bar")},g.prototype._warnContainerAspectRatio=function(a){if(this.containerAspectRatio){var b=window.getComputedStyle(a,null),c=parseFloat(b.getPropertyValue("width"),10),d=parseFloat(b.getPropertyValue("height"),10);e.floatEquals(this.containerAspectRatio,c/d)||(console.warn("Incorrect aspect ratio of container","#"+a.id,"detected:",b.getPropertyValue("width")+"(width)","/",b.getPropertyValue("height")+"(height)","=",c/d),console.warn("Aspect ratio of should be",this.containerAspectRatio))}},b.exports=g},{"./path":5,"./utils":9}],8:[function(a,b,c){var d=a("./shape"),e=a("./utils"),f=function(a,b){this._pathTemplate="M 0,{halfOfStrokeWidth} L {width},{halfOfStrokeWidth} L {width},{width} L {halfOfStrokeWidth},{width} L {halfOfStrokeWidth},{strokeWidth}",this._trailTemplate="M {startMargin},{halfOfStrokeWidth} L {width},{halfOfStrokeWidth} L {width},{width} L {halfOfStrokeWidth},{width} L {halfOfStrokeWidth},{halfOfStrokeWidth}",d.apply(this,arguments)};f.prototype=new d,f.prototype.constructor=f,f.prototype._pathString=function(a){var b=100-a.strokeWidth/2;return e.render(this._pathTemplate,{width:b,strokeWidth:a.strokeWidth,halfOfStrokeWidth:a.strokeWidth/2})},f.prototype._trailString=function(a){var b=100-a.strokeWidth/2;return e.render(this._trailTemplate,{width:b,strokeWidth:a.strokeWidth,halfOfStrokeWidth:a.strokeWidth/2,startMargin:a.strokeWidth/2-a.trailWidth/2})},b.exports=f},{"./shape":7,"./utils":9}],9:[function(a,b,c){function d(a,b,c){a=a||{},b=b||{},c=c||!1;for(var e in b)if(b.hasOwnProperty(e)){var f=a[e],g=b[e];c&&l(f)&&l(g)?a[e]=d(f,g,c):a[e]=g}return a}function e(a,b){var c=a;for(var d in b)if(b.hasOwnProperty(d)){var e=b[d],f="\\{"+d+"\\}",g=new RegExp(f,"g");c=c.replace(g,e)}return c}function f(a,b,c){for(var d=a.style,e=0;e<p.length;++e){var f=p[e];d[f+h(b)]=c}d[b]=c}function g(a,b){m(b,function(b,c){null!==b&&void 0!==b&&(l(b)&&b.prefix===!0?f(a,c,b.value):a.style[c]=b)})}function h(a){return a.charAt(0).toUpperCase()+a.slice(1)}function i(a){return"string"==typeof a||a instanceof String}function j(a){return"function"==typeof a}function k(a){return"[object Array]"===Object.prototype.toString.call(a)}function l(a){if(k(a))return!1;var b=typeof a;return"object"===b&&!!a}function m(a,b){for(var c in a)if(a.hasOwnProperty(c)){var d=a[c];b(d,c)}}function n(a,b){return Math.abs(a-b)<q}function o(a){for(;a.firstChild;)a.removeChild(a.firstChild)}var p="Webkit Moz O ms".split(" "),q=.001;b.exports={extend:d,render:e,setStyle:f,setStyles:g,capitalize:h,isString:i,isFunction:j,isObject:l,forEachObject:m,floatEquals:n,removeChildren:o}},{}]},{},[4])(4)});
+
