@@ -85,6 +85,7 @@
 
     if (typeof unsafeWindow === 'undefined') unsafeWindow = window;
 
+    const MAX_NAME_LENGTH = 128;
 
     // Note: directory names should include the trailing "/" path terminator
     const Config = $.extend({
@@ -1438,7 +1439,7 @@
     function cleanFileName(fileName, isDirectory = false) {
         // file names can't include '/' or '\'
         const fileCleanerRegex = new RegExp(`[${invalidNameCharacters}${isDirectory ? '' : '\\\\/'}]|(^[\\W.]+)|(\\s\\s+)`, 'gi');
-        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim();
+        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim().slice(MAX_NAME_LENGTH);
     }
     function removeDoubleSpaces(str) {
         return str ? str.replace(/(\s\s+)/g, ' ') : str;
