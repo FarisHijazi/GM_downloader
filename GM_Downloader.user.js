@@ -211,8 +211,8 @@
             JSZip.prototype.totalSize = 0;
             JSZip.prototype.totalLoaded = 0;
 
-            JSZip.prototype.generateIndexHtml = function generateIndexHtml() {
-                let html = '';
+        JSZip.prototype.generateIndexHtml = function generateIndexHtml(local = true) {
+            const $body = $('<body>');
                 for (const key of Object.keys(this.files)) {
                     try {
                         const file = this.files[key];
@@ -220,18 +220,48 @@
                         const data = JSON.parse(file.comment ? file.comment : '{}');
 
                         //TODO: replace this with using the element API, using raw strings causes issues
-                        html += '<div> <a href="' + (data.url || file.name) + '">' +
-                            '<img src="' + file.name + '" alt="' + key + '"> </a>' +
-                            '<div>' +
-                            '<a href="' + data.page + '" target="_blank">' + file.name + ' </a> <h4>' + file.name + ' </h4> ' +
-                            '<h3>' + (data.name || file.name) + '</h3> ' +
-                            '</div>' +
-                            '</div>';
+                    const fname = '' + file.name;
+                    const src = '' + data.page;
+
+                    $body.append(
+                        $('<div class="container">')
+                            .append(
+                                $('<a class="local">local</a>')
+                                    .attr({
+                                        'href': String(data.url || file.name),
+                                    })
+                                    .append(
+                                        $('<img class="local" alt="local image failed to load">')
+                                            .attr({
+                                                src: fname,
+                                                alt: fname,
+                                            })
+                                    )
+                            )
+                            .append(
+                                $('<div class="online">')
+                                    .append(
+                                        $('<a  class="online" target="_blank">')
+                                            .attr({
+                                                href: src,
+                                            })
+                                            .text(fname)
+                                    )
+                                    .append(
+                                        $('<h4>').text(fname)
+                                    )
+                            )
+                            .append(
+                                $('<h3>').text(String(data.name || file.name))
+                            )
+                    );
+
                     } catch (e) {
-                        console.error(e)
+                    console.error(e);
                     }
                 }
-                return this.file('index.html', new Blob([html], {type: 'text/plain'}));
+
+            return this.file('index.html', new Blob([$body.html()], {type: 'text/plain'}));
             };
             JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
             JSZip.prototype.name = '';
