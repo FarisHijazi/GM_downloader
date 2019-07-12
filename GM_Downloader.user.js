@@ -26,7 +26,6 @@
  * (useful when combined with other scripts)
  */
 
-(function () {
 
     /**
      * @param details can have the following attributes:
@@ -53,7 +52,8 @@
 
 
     /**
-     * @typedef {Promise} RequestPromise
+ * @typedef {Promise} RequestPromise - (), a custom object extended from Promise
+ *
      * @property {Function} onload - identical to `promise.then()`
      * @property {Function} onerror -
      * @property {Function} onprogress -
@@ -81,6 +81,11 @@
      * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
      *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
      */
+
+ //TODO: FIXME: there's an issue with filenames ending with '_', like "example.gif_", this is an issue (not sure where it's happening)
+
+// main
+(function () {
 
 
     if (typeof unsafeWindow === 'undefined') unsafeWindow = window;
@@ -367,7 +372,6 @@
                         zip.name = zip.name.replace('$name$', document.title);
                         zip.isZipGenerated = true;
 
-                        zip.onGenZip && zip.onGenZip();
 
                         // remove from pendingZips set
                         const result = pendingZips.delete(zip);
@@ -423,13 +427,18 @@
             JSZip.prototype.activeZipThreads = 0;
             JSZip.prototype.totalSize = 0;
             JSZip.prototype.totalLoaded = 0;
-            JSZip.prototype.responseBlobs = new Set();
             /** @type {ProgressBar} */
             JSZip.prototype.__defineGetter__('progressBar', function () {
                 if (!this._progressBar)
                     this._progressBar = setupProgressBar();
                 return this._progressBar;
             });
+
+
+        /**
+         * @typedef {Object} FetchObject
+         *
+         */
 
             //TODO: this should contain all the info related to the file and its request
             /**
@@ -545,8 +554,8 @@
                                 zip.totalSize += fileSize;
                             }
                             const loadedSoFar = res.loaded;
-                            const justLoaded = loadedSoFar - zip.loadedLast;    // What has been added since the last progress call
-                            const fileprogress = loadedSoFar / res.total;   //
+                        const justLoaded = loadedSoFar - zip.loadedLast; // What has been added since the last progress call
+                        const fileprogress = loadedSoFar / res.total; //
 
                             zip.totalLoaded += justLoaded;
                             const totalProgress = zip.totalLoaded / zip.totalSize;
@@ -879,6 +888,7 @@
      */
     function download(fileUrl, fileName = '', opts = {}) {
         const args = Array.from(arguments);
+        /** @type {DownloadOptions} */
         opts = args.pop();
         // if opts was a string (probably directory)
         if (typeof opts === 'string') {
@@ -1135,7 +1145,7 @@
             _ontimeout: () => undefined,
         }, opts);
 
-        // prepend all functions with _
+        // prepend all functions with '_'
         for (const key of Object.keys(details)) {
             if (typeof (details[key]) === 'function' && key[0] !== '_') {
                 details['_' + key] = details[key];
@@ -1208,6 +1218,9 @@
      * @param {(string|Tampermonkey.Request|Object)} url
      * @param {(Tampermonkey.Request|Object)=} opts
      * @returns {RequestPromise}
+     *
+     * onload will always have a proper response object (will never be null)
+     * and the response.headers object is added
      */
     function GM_xmlhttpRequestPromise(url, opts = {}) {
         if (arguments.length === 1 && typeof (url) === 'object') {
@@ -1233,13 +1246,13 @@
             password: undefined,
 
             /// actual callbacks (passed by user)
-            _onload: () => undefined,
-            _onerror: () => undefined,
-            _onprogress: () => undefined,
-            _ontimeout: () => undefined,
-            _onabort: () => undefined,
-            _onloadstart: () => undefined,
-            _onreadystatechange: () => undefined,
+            _onload: (e) => undefined,
+            _onerror: (e) => undefined,
+            _onprogress: (e) => undefined,
+            _ontimeout: (e) => undefined,
+            _onabort: (e) => undefined,
+            _onloadstart: (e) => undefined,
+            _onreadystatechange: (e) => undefined,
         }, opts);
 
         // prepend all functions with _
@@ -1542,22 +1555,24 @@
 
     //TODO: create type: Downloadable or DFile (download file)
     /**
-     * extract name and url from
+     * extract name and url from the file object
+     *
+     * @param {Object|string} file - object or URL string
+     * @returns {Downloadable}
      *
      *   file.url = file.fileURL || file.fileUrl || file.url || file.src || file.href;
      *   file.name = file.fileName || file.alt || file.title || nameFile(file.fileURL) || "Untitled image";
-     * @param {Object|string} file
-     * @returns {Downloadable}
      */
     function normalizeFile(file) {
         if (!file) return {};
+
+        const dFile = {};
+        var url = '';
+
         if (typeof file === 'string') { // if string
             //TODO: name is never specified here
-            const url = file;
-            return ({
-                url: tryToGetBigImageUrl(url),
-                name: nameFile(url) || 'untitled.unkownformat.gif'
-            });
+            url = file;
+            file = {};
         }
 
         function getFirstProperty(o, properties) {
@@ -1568,11 +1583,19 @@
             }
         }
 
-        const dFile = {};
-        var url = getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
+        url = url || getFirstProperty(file, ['fileURL', 'fileUrl', 'url', 'src', 'href']);
 
         dFile.url = tryToGetBigImageUrl(url);
         dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
+
+
+        dFile.fileExtension = getFileExtension(dFile.name);
+        if(!dFile.fileExtension){
+            dFile.fileExtension = getFileExtension(url);
+            dFile.name += dFile.fileExtension;
+        }
+
+        dFile.name = cleanFileName(dFile.name);
 
         return dFile;
     }
