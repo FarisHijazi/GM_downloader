@@ -657,6 +657,15 @@
                 url.searchParams.set('format', 'jpg');
                 url.searchParams.set('name', 'orig');
                 return url.toString()
+            } else if (/imgur\.com/.test(url.hostname)) {
+                const imgurThumbnailToFullres = src => 'https://i.imgur.com/' + src.split('/').pop()
+                    .replace(/b\./, '.');// remove the last 'b'
+                return imgurThumbnailToFullres(fileUrl)
+            }
+
+
+            if (/https:\/\/gfycat\.com\/gifs\/detail\/.+/.test(fileUrl)) { // if gfycat home page url, image can be extracted
+                return `https://thumbs.gfycat.com/${fileUrl.split('/').pop()}-size_restricted.gif`;
             }
         } catch (e) {
         }
