@@ -458,41 +458,41 @@
                     return;
                 }
 
-                const xhr = GM_xmlhttpRequestPromise({
+            var xhr = {};
+            xhr = GM_xmlhttpRequestPromise({
                     method: 'GET',
                     url: fileUrl,
                 responseType: 'arraybuffer',
                 binary: true,
                 onload: res => {
-                    zip.inactivityTimeout();
+                    zip.startInactivityTimeout();
 
                     if (zip.file(fileName)) {
                         console.warn('ZIP already contains the file: ', fileName);
                         return;
                         }
 
-                        res && console.debug(
-                            'onload:' +
-                            '\nreadyState:', res.readyState,
-                            '\nresponseHeaders:', res.responseHeaders,
-                            '\nstatus:', res.status,
-                            '\nstatusText:', res.statusText,
-                            '\nfinalUrl:', res.finalUrl,
-                            '\nresponseText:', res.responseText ? res.responseText.slice(0, 100) + '...' : ''
-                        );
+                    res && console.debug('onload:', res);
 
-                        if (checkResponse(res, fileUrl, fileName)) {
-                            zip.current++;
-                            return;
+                    const fileExtension = contentTypeToFileExtension(res.headers['content-type']);
+
+                    xhr.res = res;
+                    const blob = new Blob([res.response], {type: res.headers['content-type']});
+
+                    const name = `${fileName.trim()}_${zip.current + 1}.${fileExtension}`;
+
+                    console.log(
+                        'Adding file to zip:',
+                        {
+                            fileName: fileName,
+                            contentType: res.headers['content-type'],
+                            name: name,
+                            url: fileUrl,
                         }
+                    );
 
-                        const {contentType, fileExtension} = getContentType(res.responseHeaders);
-                        const blob = new Blob([res.response], {type: contentType});
-
-                        console.log(`Adding file to zip:\n"${fileName}"\n"${fileUrl}"`, '\ncontentType:', contentType);
-
-                        zip.file(`${fileName.trim()}_${zip.current + 1}.${fileExtension}`, blob);
-                        zip.responseBlobs.add(blob);
+                    zip.file(name, blob);
+                    xhr.blob = blob;
                         zip.current++;
 
                         // if finished, stop
@@ -500,7 +500,8 @@
                             return;
                         }
 
-                        // Completed! TODO: move this outside, make it that when all requestAndZip()s finish
+                    // Completed!
+                    // TODO: move this outside, make it that when all requestAndZip()s finish
                         if (zip.current >= zip.zipTotal - 1) {
                             debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
                             zip.zipTotal = -1;
@@ -510,7 +511,7 @@
                     zip.activeZipThreads--;
                 },
                 onreadystatechange: res => {
-                    zip.inactivityTimeout();
+                    zip.startInactivityTimeout();
 
                     console.debug('Request state changed to: ' + res.readyState);
                     if (res.readyState === 4) {
@@ -518,24 +519,14 @@
                     }
                 },
                 onerror: res => {
-                    zip.inactivityTimeout();
+                    zip.startInactivityTimeout();
 
-                    if (checkResponse(res, fileUrl, fileName)) {
-                        return;
-                    }
+                    console.error('An error occurred:\n', res);
 
-                        console.error('An error occurred.',
-                            '\nreadyState: ', res.readyState,
-                            '\nresponseHeaders: ', res.responseHeaders,
-                            '\nstatus: ', res.status,
-                            '\nstatusText: ', res.statusText,
-                            '\nfinalUrl: ', res.finalUrl,
-                            '\nresponseText: ', res.responseText,
-                        );
                     zip.activeZipThreads--;
                 },
                 onprogress: res => {
-                    zip.inactivityTimeout();
+                    zip.startInactivityTimeout();
 
                     // FIXME: fix abort condition, when should it abort?
                     const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
@@ -988,7 +979,6 @@
                 'a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(opts.name))) + ' ' + (++fileNumber);
         }
         opts.rename = false; // set to false for successive retries (otherwise the name would be ruined)
-        // TODO: kill global variables (kill fileNumber)
 
         // == naming the directory
 
@@ -1113,6 +1103,14 @@
     }
 
 
+    function parseResponseHeaders(responseHeaders) {
+        return Object.fromEntries(
+            (responseHeaders || '').split('\n')
+                .map(line => line.split(': '))
+                .filter(pair => pair[0] !== undefined && pair[1] !== undefined)
+        );
+    }
+
     /**
      * basic promise that will be built up on later, pure GM_download promise
      * @param url
@@ -1153,6 +1151,8 @@
                 // the functions that the user passes
                 onload: function (res) {
                     if (res && res.status >= 200 && res.status < 300) {
+                        // parsing headers object from responseHeaders (string)
+                        res.headers = parseResponseHeaders(res.responseHeaders);
                         details._onload(res);
                         resolve(res);
                     } else {
@@ -1269,6 +1269,8 @@
                 /// the functions that the user passes
                 onload: function (res) {
                     if (res && res.status >= 200 && res.status < 300) {
+                        // parsing headers object from responseHeaders (string)
+                        res.headers = parseResponseHeaders(res.responseHeaders);
                         details._onload(res);
                         resolve(res);
                     } else {
@@ -1299,7 +1301,7 @@
             });
 
             timeout = setTimeout(function () {
-                console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
+                // debug && console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
 
                 try {
                     xhr = GM_xmlhttpRequest(details);
@@ -1328,6 +1330,7 @@
 
         return promise;
     }
+
 
     try {
         (function () {
@@ -1388,48 +1391,6 @@
         console.error(e);
     }
 
-    /**
-     * @deprecated
-     * @param inputUrls
-     * @param directory
-     * @param maxDlLimit
-     */
-    function downloadBatch(inputUrls, directory, maxDlLimit) { // download batch but with a max count limit
-        let message = 'downloadBatch() is deprecated, plz use download() or zipFiles() instead';
-        console.error(message);
-        alert(message);
-
-        console.log('maxDownloadCount was passed (but all inputUrls will be downloaded anyways):', maxDlLimit);
-        directory = directory || document.title;
-
-        zipImages(inputUrls, `${directory} ${directory}`);
-        if (!inputUrls) throw 'input URLs null!';
-
-        console.log('MAIN_DIRECTORY:', Config.MAIN_DIRECTORY);
-
-
-        let i = 0;
-        var interval = setInterval(() => {
-            if (i < inputUrls.length) {
-                const url = inputUrls[i];
-                download(url, null, `${location.hostname} - ${document.title}`);
-            } else clearInterval(interval);
-        }, 200);
-    }
-
-    /**@deprecated*/
-    function downloadImageBatch(inputUrls, directory) {
-        let message = 'downloadImageBatch() is deprecated, plz use download() or zipFiles() instead';
-        console.error(message);
-        alert(message);
-
-        if (!inputUrls) throw 'mainImage input URLs null!';
-
-        console.log('Image batch received:', inputUrls);
-        const batchName = `${cleanFileName(cleanGibberish(document.title), true)}/`;
-        zipImages(inputUrls, `${directory} ${batchName}`);
-    }
-
 
     function tryDecodeURIComponent(str) {
         try {
@@ -1439,6 +1400,10 @@
             return str;
         }
     }
+    /**
+    * @param fileUrl
+    * @returns filename (without extension)
+    */
     function nameFile(fileUrl) {
         if (Config.NAME_FILES_BY_NUMBER === true) return (` ${fileNumber++}`);
 
@@ -1457,7 +1422,8 @@
     function getFileExtension(fileUrl) {
         var ext = clearUrlGibberish((String(fileUrl)).split(/[.]/).pop()) //the string after the last '.'
             .replace(/[^a-zA-Z0-9.]+($|\?)/gi, '') // replace everything that is non-alpha, numeric nor '.'
-            .replace(/[^\w]/gi, '');
+            .replace(/[]/gi, '')
+        ;
 
         if (!isValidExtension(ext)) {
             ext = 'oops.gif';
@@ -1547,17 +1513,18 @@
             );
 
             // if not a proxyUrl, try to use a proxy
-            if (!isDdgUrl(res.finalUrl || res.url)) {
+            if (!PProxy.DDG.test(res.finalUrl || res.url)) {
                 console.debug(
                     'retrying with ddgproxy',
-                    '\nddgpURL:', ddgProxy(fileUrl),
+                    // '\nddgpURL:', ddgProxy(fileUrl),
                     '\nfileURL:', fileUrl,
                     '\nresponse.finalURL:', res.finalUrl
                 );
 
-                // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-                const {contentType, fileExtension} = getContentType(res.responseHeaders);
-                const blob = new Blob([res.response], {type: contentType});
+                const mimeType1 = res.headers['content-type'].split('/')[0];
+                const fileExtension = contentTypeToFileExtension(res.headers['content-type']);
+
+                const blob = new Blob([res.response], {type: res.headers['content-type']});
 
                 if (/(<!DOCTYPE)|(<html)/.test(res.responseText) || !/image/i.test(mimeType1)) {
                     console.error('Not image data!', res.responseText);
