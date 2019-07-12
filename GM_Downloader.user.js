@@ -234,18 +234,17 @@
             return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
         });
 
-        var timeoutToAutoGenzip = 20;
+        JSZip.prototype._inactivityTimeout = 20 * 1000;
 
         /**
+         * reset the _inactivityTimeout
+         *
          * auto genZip() when zip is fetches are inactive for a long time (when the requests die out)
-         * this timeout will be called when the fetches are inactive for a time longer than 'timeoutToAutoGenzip'
-         * @returns {number}
+         * this timeout will be called when the fetches are inactive for a time longer than 'timeoutToAutoGenZip'
          */
-        JSZip.prototype.inactivityTimeout = function () {
-            clearTimeout(this._autoGenzipTimeout); // clear any already existing timeout
-            const timeout = setTimeout(() => this.genZip(), timeoutToAutoGenzip);
-            this._autoGenzipTimeout = timeout;
-            return timeout;
+        JSZip.prototype.startInactivityTimeout = function () {
+            clearTimeout(this._inactivityTimeout); // clear any already existing timeout
+            this._inactivityTimeout = setTimeout(() => this.genZip(), this._inactivityTimeout);
         };
 
         /**called when the zip is generated*/
@@ -254,14 +253,63 @@
                 console.log('onGenZip()', this);
             };
 
+        /**
+         * @param {(Object[]|Downloadable[])=} fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
+         *  if empty, will use images matching this selector by default: "img.img-big"
+         *
+         * @param {string=} zipName
+         * @return {Promise<?>} TODO: specify type
+         */
+        JSZip.prototype.zipFiles = function(fileUrls, zipName = '') {
+            const zip = this;
+
+            pendingZips.add(zip);
+            zip.name = (zipName ? zipName : document.title).replace(/\//g, ' ');
+            var pb = zip.progressBar; // init progressBar
+            zip.fetchList = [];
+
+            const files = Array.from(fileUrls || document.querySelectorAll('img.img-big, img[loaded="true"]'))
+                .map(normalizeFile)
+                .filter(file => !!file && file.url);
+
+            zip.zipTotal = files.length;
+
+            window.addEventListener('beforeunload', zipBeforeUnload);
+            console.log('zipping files:', files);
+
+            // give access to the zip variable by adding it to the global object
+            console.log(
+                `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
+            );
+            unsafeWindow.zips.push(zip);
+
+            const promises = [];
+            for (const file of files)
+                try {
+                    const req = zip.requestAndZip(file.url, file.name);
+                    promises.push(req);
+                } catch (r) {
+                    console.error(r);
+                }
+
+            //TODO: this should return a promise of when all the files have been zipped,
+            //          this can be done using Promise.all(zip.fetchList)
+            return Promise.all(promises);
+        };
+
         JSZip.prototype.genZip = function genZip(updateCallback = null) {
             const zip = this;
 
-            clearTimeout(zip._autoGenzipTimeout);
+            clearTimeout(zip._inactivityTimeout);
 
-            zip.__ongenzipProgressCounter = 0; //TODO: refactor: delete zip
+            zip._ongenZipProgressCounter = 0; //TODO: refactor: delete zip
 
-            var genzipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
+            if (zip._genZipProgressBar != null) { // if already generating zip
+                console.log('genZip(): genZipProgressBar is already defined, gonna finish the old request first and abort this one, try again once it\'s done', zip);
+                return;
+            }
+
+            zip._genZipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
                     strokeWidth: 4,
                     easing: 'easeInOut',
                     duration: 1400,
@@ -296,9 +344,9 @@
                 });
 
                 const _updateCallback = function (metadata) {
-                    genzipProgressBar.animate(metadata.percent);
+                zip._genZipProgressBar.animate(metadata.percent / 100);
 
-                    if (++zip.__ongenzipProgressCounter % 50 === 0) {
+                if (++zip._ongenZipProgressCounter % 50 === 0) {
                         console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
                         if (metadata.currentFile) {
                             console.log('current file = ' + metadata.currentFile);
@@ -327,16 +375,22 @@
                             console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
                         }
 
+                    const onload = function (e) {
+                        zip.onDownload && zip.onDownload();
+                        zip._genZipProgressBar && zip._genZipProgressBar.destroy();
+                        zip._genZipProgressBar = undefined;
+
+                        zip.onGenZip && zip.onGenZip();
+                    };
+
                         return GM_download({
                             url: objectUrl,
                             name: zip.pathname,
-                            onload: function (e) {
-                                zip.onDownload && zip.onDownload();
-                                genzipProgressBar && genzipProgressBar.destroy();
-                            },
+                        onload: onload,
                             onerror: function (e) {
                                 console.warn('couldn\'t download zip', zip, e);
                                 saveByAnchor(objectUrl, zip.pathname);
+                            onload(e);
                             }
                         });
                     });
@@ -386,20 +440,18 @@
             //FIXME: fix checkResponse
             //TODO: make better arguments
             /**
-             * Requests the image and adds it to the local zip
-             * @param fileUrl
-             * @param fileName
-             * @param {function=} checkResponse function(this: zip, response): function which is passed the response in both onload and onerror
-             */
-            JSZip.prototype.requestAndZip = function (fileUrl, fileName, checkResponse = (res, furl, fname) => null) {
-                var zip = this;
-                var fileSize = 0;
-                zip.loadedLast = 0;
-                zip.activeZipThreads++;
-                checkResponse = checkResponse.bind(zip); // the `this` argument will always be the zip
+         * Requests the image and adds it to the local zip
+         * @param fileUrl
+         * @param fileName
+         */
+        JSZip.prototype.requestAndZip = function (fileUrl, fileName) {
+            var zip = this;
+            var fileSize = 0;
+            zip.loadedLast = 0;
+            zip.activeZipThreads++;
 
-                //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
-                fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
+            //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
+            fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
 
                 if (zip.file(fileName)) {
                     console.warn('ZIP already contains the file: ', fileName);
@@ -536,34 +588,12 @@
         //
     })();
 
-    /**
-     *
-     * @param responseHeaders
-     * @returns {{fileExtension: string | *, contentType: string}}
-     */
-    function getContentType(responseHeaders) {
-        const [fullMatch, mimeType1, mimeType2] = responseHeaders.match(/content-type: ([\w]+)\/([\w\-]+)/);
-        const contentType = [mimeType1, mimeType2].join('/');
-
-        const fileExtension = unsafeWindow.mimeTypes.hasOwnProperty(contentType) && unsafeWindow.mimeTypes[contentType] ?
-            unsafeWindow.mimeTypes[contentType].extensions[0] :
-            mimeType2;
-        return {contentType, fileExtension};
+    function contentTypeToFileExtension(contentType, mimeTypes = unsafeWindow.mimeTypes) {
+        contentType = contentType.split(' ')[0];
+        return mimeTypes.hasOwnProperty(contentType) && mimeTypes[contentType] ?
+            mimeTypes[contentType].extensions[0] :
+            contentType.split('/').pop().match(/\w+/); // match the first few word chars
     }
-
-    /**
-     * @param {Tampermonkey.Response} res - parses the responseHeaders from the response and adds them as fields to `res`
-     */
-    function extendResponse(res) {
-        // you'll get a match like this:    ["content-type: image/png", "image", "png"]
-        const responseHeaders = res.responseHeaders;
-        const {contentType, fileExtension} = getContentType(responseHeaders);
-
-        // adding properties
-        res.contentType = contentType;
-        res.fileExtension = fileExtension;
-    }
-
 
     function storeDownloadHistory() {
         if (downloadedSet.size <= 0) return;
@@ -1452,7 +1482,7 @@
      * creates an anchor, clicks it, then removes it
      * this is done because some actions cannot be done except in this way
      * @param {string} url
-     * @param {string=} name
+     * @param {string=} name (including file extension)
      * @param {string=} target
      */
     function anchorClick(url, name = '', target = 'self') {
@@ -1490,45 +1520,14 @@
     }
 
     /**
-     * @param {(Object[]|Downloadable[])=} fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
-     *  if empty, will use images matching this selector by default: "img.img-big"
-     *
-     * @param {string=} zipName
-     * @return {JSZip}
+     * @param fileUrls
+     * @param zipName
+     * @returns {JSZip|*|JSZip|*}
+     * @deprecated use JSZip.prototype.zipFiles()
      */
-    function zipFiles(fileUrls, zipName = '') {
-        const zip = new JSZip();
-
-        pendingZips.add(zip);
-        zip.name = (zipName ? zipName : document.title).replace(/\//g, ' ');
-        var pb = zip.progressBar; // init progressBar
-        zip.fetchList = [];
-
-        const files = Array.from(fileUrls || document.querySelectorAll('img.img-big'))
-            .map(normalizeFile)
-            .filter(file => !!file && file.url);
-
-        zip.zipTotal = files.length;
-
-        window.addEventListener('beforeunload', zipBeforeUnload);
-        console.log('zipping files:', files);
-
-        // give access to the zip variable by adding it to the global object
-        console.log(
-            `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
-        );
-        unsafeWindow.zips.push(zip);
-
-
-        for (const file of files)
-            try {
-                zip.requestAndZip(file.url, file.name);
-            } catch (r) {
-                console.error(r);
-            }
-
-        //TODO: this should return a promise of when all the files have been zipped,
-        //          this can be done using Promise.all(zip.fetchList)
+    function zipFiles(fileUrls, zipName='') {
+        var zip = new JSZip();
+        zip.zipFiles(fileUrls, zipName);
         return zip;
     }
 
@@ -1753,13 +1752,13 @@
     }
 
     function getFilenameSimple(url) {
-        if (url) {
+        if (!url)
+            return '';
+
             var m = url.toString().match(/.*\/(.+?)\./);
             if (m && m.length > 1) {
                 return m[1];
             }
-        } else
-            return '';
     }
 
     function getNameFromElement(element) {
@@ -1776,8 +1775,6 @@
     unsafeWindow.setNameFilesByNumber = setNameFilesByNumber;
     unsafeWindow.download = download;
     unsafeWindow.GM_download = GM_download;
-    unsafeWindow.downloadBatch = downloadBatch;
-    unsafeWindow.downloadImageBatch = downloadImageBatch;
     unsafeWindow.getFileExtension = getFileExtension;
     unsafeWindow.nameFile = nameFile;
     unsafeWindow.makeTextFile = makeTextFile;
@@ -1791,28 +1788,9 @@
     unsafeWindow.GM_downloadPromise = GM_downloadPromise;
     unsafeWindow.GM_xmlhttpRequestPromise = GM_xmlhttpRequestPromise;
 
-    // exposeSymbols([
-    //     'JSZip',
-    //     'setNameFilesByNumber',
-    //     'download',
-    //     'GM_download',
-    //     'downloadBatch',
-    //     'downloadImageBatch',
-    //     'getFileExtension',
-    //     'nameFile',
-    //     'makeTextFile',
-    //     'anchorClick',
-    //     'saveByAnchor',
-    //     'zipFiles',
-    //     'zipImages',
-    //     'storeDownloadHistory',
-    //     'GM_fetch',
-    //     'GM_xmlhttpRequest',
-    //     'GM_downloadPromise',
-    //     'GM_xmlhttpRequestPromise',
-    // ], this);
     unsafeWindow.MAIN_DIRECTORY = Config.MAIN_DIRECTORY;
 
+    // FIXME: doesn't work
     function exposeSymbols(symbols, root = this, override = false) {
         for (const symbol of symbols) {
             if (!root) {
