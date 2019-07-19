@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Downloader
 // @namespace    https://github.com/buzamahmooza
-// @version      0.5.3
+// @version      0.5.4
 // @description  A downloader script that has handy features such as: (download zip and download an array of images, download an image),
 // @description  (useful when combined with other scripts)
 // @description  Note:  if you include this script via @require, make sure to also include all the dependencies of this script (all the @require urls below)
@@ -27,62 +27,60 @@
  */
 
 
-    /**
-     * @param details can have the following attributes:
-     * @param details.url - the URL from where the data should be downloaded
-     * @param details.name - the filename - for security reasons the file extension needs to be whitelisted at Tampermonkey's options page
-     * @param details.headers - see GM_xmlhttpRequest for more details
-     * @param details.saveAs - boolean value, show a saveAs dialog
-     * @param details.onerror callback to be executed if this download ended up with an error
-     * @param details.onload callback to be executed if this download finished
-     * @param details.onprogress callback to be executed if this download made some progress
-     * @param details.ontimeout callback to be executed if this download failed due to a timeout
-     * @param details.The download argument of the onerror callback can have the following attributes:
-     * @param details.error - error reason
-     * @param details.not_enabled - the download feature isn't enabled by the user
-     * @param details.not_whitelisted - the requested file extension is not whitelisted
-     * @param details.not_permitted - the user enabled the download feature, but did not give the downloads permission
-     * @param details.not_supported - the download feature isn't supported by the browser/version
-     * @param details.not_succeeded - the download wasn't started or failed, the details attribute may provide more information
-     * @param details.details - detail about that error
-     * @param details.Returns an object with the following property:
-     * @param details.abort - function to be called to cancel this download
-     */
-    // GM_download;
+/**
+ * @param details can have the following attributes:
+ * @param details.url - the URL from where the data should be downloaded
+ * @param details.name - the filename - for security reasons the file extension needs to be whitelisted at Tampermonkey's options page
+ * @param details.headers - see GM_xmlhttpRequest for more details
+ * @param details.saveAs - boolean value, show a saveAs dialog
+ * @param details.onerror callback to be executed if this download ended up with an error
+ * @param details.onload callback to be executed if this download finished
+ * @param details.onprogress callback to be executed if this download made some progress
+ * @param details.ontimeout callback to be executed if this download failed due to a timeout
+ * @param details.The download argument of the onerror callback can have the following attributes:
+ * @param details.error - error reason
+ * @param details.not_enabled - the download feature isn't enabled by the user
+ * @param details.not_whitelisted - the requested file extension is not whitelisted
+ * @param details.not_permitted - the user enabled the download feature, but did not give the downloads permission
+ * @param details.not_supported - the download feature isn't supported by the browser/version
+ * @param details.not_succeeded - the download wasn't started or failed, the details attribute may provide more information
+ * @param details.details - detail about that error
+ * @param details.Returns an object with the following property:
+ * @param details.abort - function to be called to cancel this download
+ */
+// GM_download;
 
 
-    /**
+/**
  * @typedef {Promise} RequestPromise - (), a custom object extended from Promise
  *
-     * @property {Function} onload - identical to `promise.then()`
-     * @property {Function} onerror -
-     * @property {Function} onprogress -
-     * @property {Function} ontimeout -
-     * @property {Function} onabort -
-     * @property {Function} onloadstart -
-     * @property {Function} onreadystatechange -
-     */
+ * @property {Function} onload - identical to `promise.then()`
+ * @property {Function} onerror -
+ * @property {Function} onprogress -
+ * @property {Function} ontimeout -
+ * @property {Function} onabort -
+ * @property {Function} onloadstart -
+ * @property {Function} onreadystatechange -
+ */
 
-    /**
-     * @typedef {Tampermonkey.DownloadRequest} downloadOptions
-     * @property {string}    url
-     * @property {string}    name
-     * @property {bool}      [rename=true]
-     * @property {string}    directory
-     * @property {string[]}  fallbackUrls - list of urls
-     * @property {Element}   element - an HTML element
-     * @property {string}    mainDirectory
-     * @property {string}    directory
-     * @property {string}    fileExtension
-     * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
-     * @property {number}    attempts - Each download has a few attempts before it gives up.
-     * @property {Function}  onload
-     * @property {Function}  onerror
-     * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
-     *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
-     */
-
- //TODO: FIXME: there's an issue with filenames ending with '_', like "example.gif_", this is an issue (not sure where it's happening)
+/**
+ * @typedef {Tampermonkey.DownloadRequest} downloadOptions
+ * @property {string}    url
+ * @property {string}    name
+ * @property {bool}      [rename=true]
+ * @property {string}    directory
+ * @property {string[]}  fallbackUrls - list of urls
+ * @property {Element}   element - an HTML element
+ * @property {string}    mainDirectory
+ * @property {string}    directory
+ * @property {string}    fileExtension
+ * @property {number}    blobTimeout - set this value to save memory, delete a download blob object after it times out
+ * @property {number}    attempts - Each download has a few attempts before it gives up.
+ * @property {Function}  onload
+ * @property {Function}  onerror
+ * @property {Function}  ondownload - when the file is finally downloaded to the file system, not just to the browser
+ *  Having the element could be helpful getting it's ATTRIBUTES (such as: "download-name")
+ */
 
 // main
 (function () {
@@ -204,22 +202,22 @@
         /** The current file index being downloaded/added to the zip */
         JSZip.prototype.current = 0;
         /**
-             The total count of files to be zipped+already zipped.
-             This is useful for automatically generating the zip when zip.current >= zip.zipTotal
-             */
-            JSZip.prototype.zipTotal = 0;
-            JSZip.prototype.totalSize = 0;
-            JSZip.prototype.totalLoaded = 0;
+         The total count of files to be zipped+already zipped.
+         This is useful for automatically generating the zip when zip.current >= zip.zipTotal
+         */
+        JSZip.prototype.zipTotal = 0;
+        JSZip.prototype.totalSize = 0;
+        JSZip.prototype.totalLoaded = 0;
 
         JSZip.prototype.generateIndexHtml = function generateIndexHtml(local = true) {
             const $body = $('<body>');
-                for (const key of Object.keys(this.files)) {
-                    try {
-                        const file = this.files[key];
-                        /**{url, name, page}*/
-                        const data = JSON.parse(file.comment ? file.comment : '{}');
+            for (const key of Object.keys(this.files)) {
+                try {
+                    const file = this.files[key];
+                    /**{url, name, page}*/
+                    const data = JSON.parse(file.comment ? file.comment : '{}');
 
-                        //TODO: replace this with using the element API, using raw strings causes issues
+                    //TODO: replace this with using the element API, using raw strings causes issues
                     const fname = '' + file.name;
                     const src = '' + data.page;
 
@@ -256,16 +254,16 @@
                             )
                     );
 
-                    } catch (e) {
+                } catch (e) {
                     console.error(e);
-                    }
                 }
+            }
 
             return this.file('index.html', new Blob([$body.html()], {type: 'text/plain'}));
-            };
-            JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
-            JSZip.prototype.name = '';
-            JSZip.prototype.__defineGetter__('pathname', function () {
+        };
+        JSZip.prototype.isZipGenerated = false; // has the zip been generated/downloaded?
+        JSZip.prototype.name = '';
+        JSZip.prototype.__defineGetter__('pathname', function () {
             return `${Config.MAIN_DIRECTORY}${this.name} [${Object.keys(this.files).length}].zip`;
         });
 
@@ -285,8 +283,8 @@
         /**called when the zip is generated*/
         // TODO: maybe use an EventEmitter instead of setting a single function
         JSZip.prototype.onGenZip = function () {
-                console.log('onGenZip()', this);
-            };
+            console.log('onGenZip()', this);
+        };
 
         /**
          * @param {(Object[]|Downloadable[])=} fileUrls  this should be an iterable containing objects, each containing the fileUrl and the desired fileName.
@@ -345,124 +343,124 @@
             }
 
             zip._genZipProgressBar = new ProgressBar.Circle(zip.progressBar._container, {
-                    strokeWidth: 4,
-                    easing: 'easeInOut',
-                    duration: 1400,
-                    color: '#FCB03C',
-                    trailColor: '#eee',
-                    trailWidth: 1,
-                    svgStyle: {
-                        // width: '100%',
-                        height: '100px',
+                strokeWidth: 4,
+                easing: 'easeInOut',
+                duration: 1400,
+                color: '#FCB03C',
+                trailColor: '#eee',
+                trailWidth: 1,
+                svgStyle: {
+                    // width: '100%',
+                    height: '100px',
+                },
+                text: {
+                    value: '0',
+                    style: {
+                        // Text color.
+                        // Default: same as stroke color (options.color)
+                        color: '#999',
+                        position: 'absolute',
+                        right: '0',
+                        top: '30px',
+                        padding: 0,
+                        margin: 0,
+                        transform: null
                     },
-                    text: {
-                        value: '0',
-                        style: {
-                            // Text color.
-                            // Default: same as stroke color (options.color)
-                            color: '#999',
-                            position: 'absolute',
-                            right: '0',
-                            top: '30px',
-                            padding: 0,
-                            margin: 0,
-                            transform: null
-                        },
-                        alignToBottom: false,
-                        autoStyleContainer: false,
-                    },
-                    from: {color: '#FFEA82'},
-                    to: {color: '#ED6A5A'},
-                    step: (state, bar) => {
-                        bar.setText(Math.round(bar.value() * 100) + ' %');
-                    },
-                });
+                    alignToBottom: false,
+                    autoStyleContainer: false,
+                },
+                from: {color: '#FFEA82'},
+                to: {color: '#ED6A5A'},
+                step: (state, bar) => {
+                    bar.setText(Math.round(bar.value() * 100) + ' %');
+                },
+            });
 
-                const _updateCallback = function (metadata) {
+            const _updateCallback = function (metadata) {
                 zip._genZipProgressBar.animate(metadata.percent / 100);
 
                 if (++zip._ongenZipProgressCounter % 50 === 0) {
-                        console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
-                        if (metadata.currentFile) {
-                            console.log('current file = ' + metadata.currentFile);
-                        }
+                    console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
+                    if (metadata.currentFile) {
+                        console.log('current file = ' + metadata.currentFile);
                     }
+                }
 
-                    if (typeof (updateCallback) === 'function')
-                        updateCallback.call(zip, metadata);
-                };
-
-
-                return zip.generateIndexHtml()
-                    .generateAsync({type: 'blob'}, _updateCallback)
-                    .then(blob => {
-                        const objectUrl = URL.createObjectURL(blob);
-                        console.debug('zip objectUrl\n' + objectUrl);
-
-                        zip.name = zip.name.replace('$name$', document.title);
-                        zip.isZipGenerated = true;
+                if (typeof (updateCallback) === 'function')
+                    updateCallback.call(zip, metadata);
+            };
 
 
-                        // remove from pendingZips set
-                        const result = pendingZips.delete(zip);
-                        if (result === false) {
-                            console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
-                        }
+            return zip.generateIndexHtml()
+                .generateAsync({type: 'blob'}, _updateCallback)
+                .then(blob => {
+                    const objectUrl = URL.createObjectURL(blob);
+                    console.debug('zip objectUrl\n' + objectUrl);
+
+                    zip.name = zip.name.replace('$name$', document.title);
+                    zip.isZipGenerated = true;
+
+
+                    // remove from pendingZips set
+                    const result = pendingZips.delete(zip);
+                    if (result === false) {
+                        console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
+                    }
 
                     const onload = function (e) {
                         zip.onDownload && zip.onDownload();
                         zip._genZipProgressBar && zip._genZipProgressBar.destroy();
                         zip._genZipProgressBar = undefined;
 
-                        zip.onGenZip && zip.onGenZip();
+                        if (zip.onGenZip) zip.onGenZip();
                     };
 
-                        return GM_download({
-                            url: objectUrl,
-                            name: zip.pathname,
+                    return GM_download({
+                        url: objectUrl,
+                        name: zip.pathname,
                         onload: onload,
-                            onerror: function (e) {
-                                console.warn('couldn\'t download zip', zip, e);
-                                saveByAnchor(objectUrl, zip.pathname);
+                        onerror: function (e) {
+                            console.warn('couldn\'t download zip', zip, e);
+                            saveByAnchor(objectUrl, zip.pathname);
                             onload(e);
-                            }
-                        });
+                        }
                     });
-            };
+                });
+        };
 
-            /**
-             * @param fname:    the desired file name
-             * @returns the first iterated filename valid for the current zip (iterated: with a number added to its end).
-             * this is used to prevent overwriting  files with the same name
-             */
-            JSZip.prototype.getValidIteratedName = function (fname) {
-                if (!this.file(fname)) {
-                    return fname;
+        /**
+         * @param fname:    the desired file name
+         * @returns the first iterated filename valid for the current zip (iterated: with a number added to its end).
+         * this is used to prevent overwriting  files with the same name
+         */
+        JSZip.prototype.getValidIteratedName = function (fname) {
+            if (!this.file(fname)) {
+                return fname;
+            } else {
+                var numberStr = (fname).match(/\d+/g);
+                var newName = fname;
+                if (numberStr) {
+                    numberStr = numberStr.pop();
+                    var number = parseInt(numberStr);
+                    newName = fname.replace(numberStr, ++number)
                 } else {
-                    var numberStr = (fname).match(/\d+/g);
-                    var newName = fname;
-                    if (numberStr) {
-                        numberStr = numberStr.pop();
-                        var number = parseInt(numberStr);
-                        newName = fname.replace(numberStr, ++number)
-                    } else {
-                        var split = newName.split('.');
-                        newName = split.slice(0, -1).join('.') + (' 1.') + split.slice(-1);
-                    }
-                    return this.getValidIteratedName(newName);
+                    var split = newName.split('.');
+                    newName = split.slice(0, -1).join('.') + (' 1.') + split.slice(-1);
                 }
-            };
+                return this.getValidIteratedName(newName);
+            }
+        };
 
-            JSZip.prototype.current = 0;
-            JSZip.prototype.activeZipThreads = 0;
-            JSZip.prototype.totalSize = 0;
-            JSZip.prototype.totalLoaded = 0;
-            /** @type {ProgressBar} */
-            JSZip.prototype.__defineGetter__('progressBar', function () {
-                if (!this._progressBar)
-                    this._progressBar = setupProgressBar();
-                return this._progressBar;
-            });
+        JSZip.prototype.current = 0;
+        JSZip.prototype.activeZipThreads = 0;
+        JSZip.prototype.totalSize = 0;
+        JSZip.prototype.totalLoaded = 0;
+        /** @type {ProgressBar} */
+        JSZip.prototype.__defineGetter__('progressBar', function () {
+            if (!this._progressBar)
+                this._progressBar = setupProgressBar();
+            return this._progressBar;
+        });
 
 
         /**
@@ -470,15 +468,15 @@
          *
          */
 
-            //TODO: this should contain all the info related to the file and its request
-            /**
-             * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
-             */
-            JSZip.prototype.fetchList = [];
+        //TODO: this should contain all the info related to the file and its request
+        /**
+         * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
+         */
+        JSZip.prototype.fetchList = [];
 
-            //FIXME: fix checkResponse
-            //TODO: make better arguments
-            /**
+        //FIXME: fix checkResponse
+        //TODO: make better arguments
+        /**
          * Requests the image and adds it to the local zip
          * @param fileUrl
          * @param fileName
@@ -492,15 +490,15 @@
             //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
             fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
 
-                if (zip.file(fileName)) {
-                    console.warn('ZIP already contains the file: ', fileName);
-                    return;
-                }
+            if (zip.file(fileName)) {
+                console.warn('ZIP already contains the file: ', fileName);
+                return;
+            }
 
             var xhr = {};
             xhr = GM_xmlhttpRequestPromise({
-                    method: 'GET',
-                    url: fileUrl,
+                method: 'GET',
+                url: fileUrl,
                 responseType: 'arraybuffer',
                 binary: true,
                 onload: res => {
@@ -509,7 +507,7 @@
                     if (zip.file(fileName)) {
                         console.warn('ZIP already contains the file: ', fileName);
                         return;
-                        }
+                    }
 
                     res && console.debug('onload:', res);
 
@@ -532,21 +530,21 @@
 
                     zip.file(name, blob);
                     xhr.blob = blob;
-                        zip.current++;
+                    zip.current++;
 
-                        // if finished, stop
-                        if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
-                            return;
-                        }
+                    // if finished, stop
+                    if (zip.current < zip.zipTotal || zip.zipTotal <= 0) {
+                        return;
+                    }
 
                     // Completed!
                     // TODO: move this outside, make it that when all requestAndZip()s finish
-                        if (zip.current >= zip.zipTotal - 1) {
-                            debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
-                            zip.zipTotal = -1;
-                            if (zip.progressBar) zip.progressBar.destroy();
-                            zip.genZip();
-                        }
+                    if (zip.current >= zip.zipTotal - 1) {
+                        debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
+                        zip.zipTotal = -1;
+                        if (zip.progressBar) zip.progressBar.destroy();
+                        zip.genZip();
+                    }
                     zip.activeZipThreads--;
                 },
                 onreadystatechange: res => {
@@ -569,50 +567,50 @@
 
                     // FIXME: fix abort condition, when should it abort?
                     const abortCondition = zip.files.hasOwnProperty(fileName) || zip.current < zip.zipTotal || zip.zipTotal <= 0;
-                        if (abortCondition && false) {
-                            if (xhr.abort) {
-                                xhr.abort();
-                                console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
-                            } else
-                                console.error('xhr.abort not defined');
-                            return;
-                        }
+                    if (abortCondition && false) {
+                        if (xhr.abort) {
+                            xhr.abort();
+                            console.log('GM_xmlhttpRequest ABORTING zip!!!!!');
+                        } else
+                            console.error('xhr.abort not defined');
+                        return;
+                    }
 
-                        if (res.lengthComputable) {
-                            if (fileSize === 0) { // happens once
-                                fileSize = res.total;
-                                zip.totalSize += fileSize;
-                            }
-                            const loadedSoFar = res.loaded;
+                    if (res.lengthComputable) {
+                        if (fileSize === 0) { // happens once
+                            fileSize = res.total;
+                            zip.totalSize += fileSize;
+                        }
+                        const loadedSoFar = res.loaded;
                         const justLoaded = loadedSoFar - zip.loadedLast; // What has been added since the last progress call
                         const fileprogress = loadedSoFar / res.total; //
 
-                            zip.totalLoaded += justLoaded;
-                            const totalProgress = zip.totalLoaded / zip.totalSize;
+                        zip.totalLoaded += justLoaded;
+                        const totalProgress = zip.totalLoaded / zip.totalSize;
 
-                            if (debug) console.debug(
-                                'loadedSoFar:', res.loaded,
-                                '\njustLoaded:', loadedSoFar - zip.loadedLast,
-                                '\nfileprogress:', fileprogress
-                            );
+                        if (debug) console.debug(
+                            'loadedSoFar:', res.loaded,
+                            '\njustLoaded:', loadedSoFar - zip.loadedLast,
+                            '\nfileprogress:', fileprogress
+                        );
 
-                            const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
-                            if (zip.progressBar) {
-                                zip.progressBar.set(totalProgress);
-                                zip.progressBar.setText(progressText);
-                            } else {
-                                $('#progressbar-container').text(progressText);
-                            }
-
-                            zip.loadedLast = loadedSoFar;
+                        const progressText = `Files in ZIP: (${Object.keys(zip.files).length} / ${zip.zipTotal}) Active threads: ${zip.activeZipThreads}     (${zip.totalLoaded} / ${zip.totalSize})`;
+                        if (zip.progressBar) {
+                            zip.progressBar.set(totalProgress);
+                            zip.progressBar.setText(progressText);
+                        } else {
+                            $('#progressbar-container').text(progressText);
                         }
-                    },
-                });
 
-                zip.fetchList.push(xhr);
+                        zip.loadedLast = loadedSoFar;
+                    }
+                },
+            });
 
-                //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
-                return xhr;
+            zip.fetchList.push(xhr);
+
+            //TODO: use GM_xmlhttpRequestPromise/GM_fetch instead and return that promise
+            return xhr;
         };
 
         //
@@ -1025,7 +1023,7 @@
             opts.name = cleanFileName(opts.name) || // if opts.name passed
                 getNameFromElement(opts.element) || //
                 nameFile(opts.url) ||
-                'a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(opts.name))) + ' ' + (++fileNumber);
+                ('a_' + (cleanGibberish(nameFile(document.title)) || cleanGibberish(nameFile(opts.name))) + ' ' + (++fileNumber));
         }
         opts.rename = false; // set to false for successive retries (otherwise the name would be ruined)
 
@@ -1487,7 +1485,7 @@
     function cleanFileName(fileName, isDirectory = false) {
         // file names can't include '/' or '\'
         const fileCleanerRegex = new RegExp(`[${invalidNameCharacters}${isDirectory ? '' : '\\\\/'}]|(^[\\W.]+)|(\\s\\s+)`, 'gi');
-        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim().slice(MAX_NAME_LENGTH);
+        return clearUrlGibberish(tryDecodeURIComponent(fileName)).replace(fileCleanerRegex, ' ').trim().slice(0, MAX_NAME_LENGTH);
     }
     function removeDoubleSpaces(str) {
         return str ? str.replace(/(\s\s+)/g, ' ') : str;
@@ -1615,10 +1613,10 @@
         }
 
         function getFirstProperty(o, properties) {
-                if (!o) return null;
-                for (const p of properties) {
-                    if (o[p])
-                        return o[p];
+            if (!o) return null;
+            for (const p of properties) {
+                if (o[p])
+                    return o[p];
             }
         }
 
@@ -1784,10 +1782,10 @@
         if (!url)
             return '';
 
-            var m = url.toString().match(/.*\/(.+?)\./);
-            if (m && m.length > 1) {
-                return m[1];
-            }
+        var m = url.toString().match(/.*\/(.+?)\./);
+        if (m && m.length > 1) {
+            return m[1];
+        }
     }
 
     function getNameFromElement(element) {
