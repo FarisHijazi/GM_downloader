@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Downloader
+// @description  A downloader script that has handy features such as: (download zip and download an array of images, download an image),
+// @author       Faris Hijazi
 // @namespace    https://github.com/buzamahmooza
 // @version      0.5.4
-// @description  A downloader script that has handy features such as: (download zip and download an array of images, download an image),
 // @description  (useful when combined with other scripts)
 // @description  Note:  if you include this script via @require, make sure to also include all the dependencies of this script (all the @require urls below)
-// @author       Faris Hijazi
 // @match        *
 // @include      *
 // @connect      *
@@ -21,10 +21,6 @@
 // @noframes
 // ==/UserScript==
 
-/*
- * A downloader script that has handy features such as: (download zip and download an array of images, download an image),
- * (useful when combined with other scripts)
- */
 
 
 /**
@@ -85,7 +81,6 @@
 // main
 (function () {
 
-
     if (typeof unsafeWindow === 'undefined') unsafeWindow = window;
 
     const MAX_NAME_LENGTH = 128;
@@ -143,7 +138,7 @@
         return function (url) {
             fakeLink.href = url;
             return fakeLink.href;
-        }
+        };
     })();
 
     /**
@@ -173,7 +168,7 @@
         }).then(res => {
             const json = JSON.parse(res.responseText);
             if (typeof unsafeWindow.mimeTypes === 'object' && Object.keys(unsafeWindow.mimeTypes).length > 0) {
-                debug && console.debug('unsafeWindow already contains unsafeWindow.mimeTypes, no need to load another one');
+                if (debug) console.debug('unsafeWindow already contains unsafeWindow.mimeTypes, no need to load another one');
                 return;
             }
             unsafeWindow.mimeTypes = json;
@@ -217,7 +212,6 @@
                     /**{url, name, page}*/
                     const data = JSON.parse(file.comment ? file.comment : '{}');
 
-                    //TODO: replace this with using the element API, using raw strings causes issues
                     const fname = '' + file.name;
                     const src = '' + data.page;
 
@@ -308,10 +302,9 @@
             zip.zipTotal = files.length;
 
             window.addEventListener('beforeunload', zipBeforeUnload);
-            console.log('zipping files:', files);
-
-            // give access to the zip variable by adding it to the global object
             console.log(
+                'zipping files:', files,
+                // give access to the zip variable by adding it to the global object
                 `zip object reference, To access, use:    window.zips[${unsafeWindow.zips.length}]\n`, zip
             );
             unsafeWindow.zips.push(zip);
@@ -330,12 +323,17 @@
             return Promise.all(promises);
         };
 
-        JSZip.prototype.genZip = function genZip(updateCallback = null) {
+        
+        /**
+         * @param {Function=} updateCallback
+         * @return {Promise}
+         */
+        JSZip.prototype.genZip = function (updateCallback = null) {
             const zip = this;
 
             clearTimeout(zip._inactivityTimeout);
 
-            zip._ongenZipProgressCounter = 0; //TODO: refactor: delete zip
+            var _ongenZipProgressCounter = 0;
 
             if (zip._genZipProgressBar != null) { // if already generating zip
                 console.log('genZip(): genZipProgressBar is already defined, gonna finish the old request first and abort this one, try again once it\'s done', zip);
@@ -375,15 +373,17 @@
                     bar.setText(Math.round(bar.value() * 100) + ' %');
                 },
             });
-
+            
             const _updateCallback = function (metadata) {
                 zip._genZipProgressBar.animate(metadata.percent / 100);
+                
+                if (metadata.currentFile)
+                    zip._genZipProgressBar.text = 'current file = ' + metadata.currentFile;
 
-                if (++zip._ongenZipProgressCounter % 50 === 0) {
+                if (++_ongenZipProgressCounter % 50 === 0) {
                     console.log('progression: ' + metadata.percent.toFixed(2) + ' %');
-                    if (metadata.currentFile) {
+                    if (metadata.currentFile)
                         console.log('current file = ' + metadata.currentFile);
-                    }
                 }
 
                 if (typeof (updateCallback) === 'function')
@@ -404,12 +404,12 @@
                     // remove from pendingZips set
                     const result = pendingZips.delete(zip);
                     if (result === false) {
-                        console.warn('warning: zip was generated and was never even initiated. Check pendingZips')
+                        console.warn('warning: zip was generated and was never even initiated. Check pendingZips');
                     }
 
                     const onload = function (e) {
-                        zip.onDownload && zip.onDownload();
-                        zip._genZipProgressBar && zip._genZipProgressBar.destroy();
+                        if (zip.onDownload) zip.onDownload();
+                        if (zip._genZipProgressBar) zip._genZipProgressBar.destroy();
                         zip._genZipProgressBar = undefined;
 
                         if (zip.onGenZip) zip.onGenZip();
@@ -429,26 +429,26 @@
         };
 
         /**
-         * @param fname:    the desired file name
-         * @returns the first iterated filename valid for the current zip (iterated: with a number added to its end).
-         * this is used to prevent overwriting  files with the same name
+         * gives a new name that is valid (doesn't conflict with another name)
+         *  does this by appending a number/incrementing if one already exists
+         * @param {string} fname - file name
          */
-        JSZip.prototype.getValidIteratedName = function (fname) {
-            if (!this.file(fname)) {
+        JSZip.prototype.genValidName = function (fname) {
+            if (!fname || !this.file(fname)) {
                 return fname;
-            } else {
-                var numberStr = (fname).match(/\d+/g);
-                var newName = fname;
-                if (numberStr) {
-                    numberStr = numberStr.pop();
-                    var number = parseInt(numberStr);
-                    newName = fname.replace(numberStr, ++number)
-                } else {
-                    var split = newName.split('.');
-                    newName = split.slice(0, -1).join('.') + (' 1.') + split.slice(-1);
-                }
-                return this.getValidIteratedName(newName);
             }
+
+            var numberStr = (fname).match(/\d+/g);
+            var newName = fname;
+            if (numberStr) {
+                numberStr = numberStr.pop();
+                var number = parseInt(numberStr);
+                newName = fname.replace(numberStr, ++number);
+            } else {
+                var split = newName.split('.');
+                newName = split.slice(0, -1).join('.') + (' 1.') + split.slice(-1);
+            }
+            return this.genValidName(newName);
         };
 
         JSZip.prototype.current = 0;
@@ -463,18 +463,19 @@
         });
 
 
+        
         /**
-         * @typedef {Object} FetchObject
-         *
+         * @typedef {Object} FileFetch
+         * @property {number} id
+         * @property {Promise} promise
          */
-
-        //TODO: this should contain all the info related to the file and its request
+        
+        //TODO: implement {FileFetch} here, instead of keeping track using promises
         /**
          * @type {Promise[]} keeps track of the xhr promises made when calling requestAndZip()
          */
         JSZip.prototype.fetchList = [];
 
-        //FIXME: fix checkResponse
         //TODO: make better arguments
         /**
          * Requests the image and adds it to the local zip
@@ -487,8 +488,8 @@
             zip.loadedLast = 0;
             zip.activeZipThreads++;
 
-            //TODO: move removeDoubleSpaces and name fixing to getValidIteratedName
-            fileName = zip.getValidIteratedName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
+            //TODO: move removeDoubleSpaces and name fixing to genValidName
+            fileName = zip.genValidName(removeDoubleSpaces(fileName.replace(/\//g, ' ')));
 
             if (zip.file(fileName)) {
                 console.warn('ZIP already contains the file: ', fileName);
@@ -509,7 +510,7 @@
                         return;
                     }
 
-                    res && console.debug('onload:', res);
+                    if (res) console.debug('onload:', res);
 
                     const fileExtension = contentTypeToFileExtension(res.headers['content-type']);
 
@@ -540,7 +541,7 @@
                     // Completed!
                     // TODO: move this outside, make it that when all requestAndZip()s finish
                     if (zip.current >= zip.zipTotal - 1) {
-                        debug && console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
+                        if (debug) console.log('Generating ZIP...\nFile count:', Object.keys(zip.files).length);
                         zip.zipTotal = -1;
                         if (zip.progressBar) zip.progressBar.destroy();
                         zip.genZip();
@@ -648,17 +649,17 @@
             if (url.hostname.indexOf('gfycat.com') === 0) {
                 url.hostname = 'giant.gfycat.com';
                 url.pathname += '.webm';
-                return url.toString()
+                return url.toString();
             } else
             // "https://pbs.twimg.com/media/"
             if (/pbs\.twimg\.com/.test(url.hostname) && /^\/media/.test(url.pathname)) {
                 url.searchParams.set('format', 'jpg');
                 url.searchParams.set('name', 'orig');
-                return url.toString()
+                return url.toString();
             } else if (/imgur\.com/.test(url.hostname)) {
                 const imgurThumbnailToFullres = src => 'https://i.imgur.com/' + src.split('/').pop()
                     .replace(/b\./, '.');// remove the last 'b'
-                return imgurThumbnailToFullres(fileUrl)
+                return imgurThumbnailToFullres(fileUrl);
             }
 
 
@@ -715,7 +716,7 @@
                         return _bindPromiseSetters(newPromise, details);
                     };
                     return this;
-                }
+                };
             }
         }
 
@@ -802,7 +803,7 @@
                     }
                 } else {
                     o.name = `${o.name}.${getFileExtension(o.url)}`;
-                    o.onerror && o.onerror(r);
+                    if (o.onerror)  o.onerror(r);
                 }
 
             },
@@ -815,7 +816,7 @@
                 var blob = new Blob([res.response], {type: 'application/octet-stream'});
                 var objectUrl = URL.createObjectURL(blob); // blob url
 
-                debug && console.log(
+                if (debug) console.log(
                     'onload(res)',
                     '\nres:', res,
                     '\nblob:', blob,
@@ -826,25 +827,14 @@
                 if (_detectXml(res.responseText)) {
                     console.error('Response was in XML:', o.url, res.responseText);
 
-                    details.onerror && details.onerror(res);
+                    if (details.onerror) details.onerror(res);
                     // cancel this download attempt
-                    promise && promise.abort && promise.abort();
+                    if (promise && promise.abort) promise.abort();
                     return;
                 }
 
                 // TODO: use the mime types in the response to get the file extension
-
-                /**
-                 * @param options
-                 * @param options.url - the URL from where the data should be downloaded
-                 * @param options.name - the filename - for security reasons the file extension needs to be whitelisted at Tampermonkey's options page
-                 * @param options.headers - see GM_xmlhttpRequest for more details
-                 * @param options.saveAs - boolean value, show a saveAs dialog
-                 * @param options.onerror - callback to be executed if this download ended up with an error
-                 * @param options.onload - callback to be executed if this download finished
-                 * @param options.onprogress - callback to be executed if this download made some progress
-                 * @param options.ontimeout - callback to be executed if this download failed due to a timeout
-                 */
+                
                 var download_details = {
                     url: details.url,
                     name: details.name,
@@ -855,6 +845,17 @@
                     onprogress: details.onprogress,
                     ontimeout: details.ontimeout,
                 };
+                /**
+                 * @param options
+                 * @param options.url
+                 * @param options.name
+                 * @param options.headers
+                 * @param options.saveAs
+                 * @param options.onerror
+                 * @param options.onload
+                 * @param options.onprogress
+                 * @param options.ontimeout
+                 */
                 GM_download(download_details); // use GM_download for the last download bit, this way we can use paths too
 
                 // reduce memory usage
@@ -869,7 +870,7 @@
                 downloadedSet.add(o.url);
 
                 console.log('Download finished', o.name, '\n' + o.url);
-                details.onloadFinal && details.onloadFinal(res);
+                if (details.onloadFinal) details.onloadFinal(res);
             },
             onprogress: function (p) {
                 console.debug('Progress:', p);
@@ -1053,11 +1054,12 @@
             '\ndownloadDirectory:', opts.directory,
             '\nextension:', opts.fileExtension,
             '\nFINAL_NAME:', removeDoubleSpaces(Config.MAIN_DIRECTORY + opts.directory + opts.name + '.' + opts.fileExtension),
-            '\n\nopts:', opts,
+            '\n\nopts:', opts
         );
 
-        // TODO: maybe the function should just stop here, maybe it should just be for renaming/building the opts
-        //  this is the point where we just call download2 or something..
+        // TODO: maybe the function should just stop here,
+        //   maybe it should just be for renaming/building the opts
+        //   this is the point where we just call download2 or something..
 
 
         // extending defaults (to prevent null function issues)
@@ -1149,11 +1151,10 @@
         GM_download(details);
     }
 
-
-    function parseResponseHeaders(responseHeaders) {
+    function parseResponseHeaders(headerStr) {
         return Object.fromEntries(
-            (responseHeaders || '').split('\n')
-                .map(line => line.split(': '))
+            (headerStr || '').split('\u000d\u000a') // '\n'
+                .map(line => line.split('\u003a\u0020')) // ": "
                 .filter(pair => pair[0] !== undefined && pair[1] !== undefined)
         );
     }
@@ -1351,7 +1352,7 @@
             });
 
             timeout = setTimeout(function () {
-                // debug && console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
+                // if (debug) console.log('GM_xmlhttpRequest(', details, ')\n ->', promise);
 
                 try {
                     xhr = GM_xmlhttpRequest(details);
@@ -1381,72 +1382,11 @@
         return promise;
     }
 
-
-    try {
-        (function () {
-            return;
-            // //BOOKMARK: was fixing message passsing between successive promise.onload().then()
-            GM_xmlhttpRequestPromise('https://i.ytimg.com/vi/RO90omga8D4/maxresdefault.jpg', {
-                responseType: 'arraybuffer',
-                binary: true,
-                // 		method: 'POST',
-            })
-                .onprogress(function (e) {
-                    console.log(
-                        'onprogress()',
-                        '\nlengthComputable:', e.lengthComputable,
-                        '\nloaded:', e.loaded,
-                        '\nposition:', e.position,
-                        '\ntotal:', e.total,
-                        '\ntotalSize:', e.totalSize,
-                        '\n', e
-                    );
-                })
-                .ontimeout(function (e) {
-                    console.log('ontimeout()', e);
-                })
-                .onabort(function (e) {
-                    console.log('onabort()', e);
-                })
-                .onloadstart(function (e) {
-                    console.log('onloadstart()', e);
-                })
-                .onreadystatechange(function (e) {
-                    console.log('onreadystatechange(), readyState=', e.readyState, '\n', e);
-                })
-
-                .onerror(function (e) {
-                    console.log('onerror()', e);
-                })
-                .onload(function (e) {
-                    console.log('onload(): SUCCESS!!!', e);
-                    return 'onloadReturn';
-                })
-                .then(e => {
-                    if (e === 'onloadReturn') {
-                        console.log('AMAZING!!!!!!! onload successfully passed data to then()!!!!');
-                    }
-                    console.log('then1():', e);
-                    return {bekfast: 'bekfast1'};
-                })
-                .then(e => {
-                    console.log('then2():', e);
-                })
-                .onload(function (e) {
-                    console.log('onload() after then()', e);
-                });
-
-        })();
-    } catch (e) {
-        console.error(e);
-    }
-
-
     function tryDecodeURIComponent(str) {
         try {
             return decodeURIComponent(str);
         } catch (e) {
-            debug && console.warn('tryDecodeURIComponent(' + str + '), failed');
+            if (debug) console.warn('tryDecodeURIComponent(' + str + '), failed');
             return str;
         }
     }
@@ -1482,6 +1422,7 @@
         return ext;
     }
 
+    /** clean file name (name without file extension) */
     function cleanFileName(fileName, isDirectory = false) {
         // file names can't include '/' or '\'
         const fileCleanerRegex = new RegExp(`[${invalidNameCharacters}${isDirectory ? '' : '\\\\/'}]|(^[\\W.]+)|(\\s\\s+)`, 'gi');
@@ -1589,7 +1530,6 @@
         });
     }
 
-
     //TODO: create type: Downloadable or DFile (download file)
     /**
      * extract name and url from the file object
@@ -1607,7 +1547,6 @@
         var url = '';
 
         if (typeof file === 'string') { // if string
-            //TODO: name is never specified here
             url = file;
             file = {};
         }
@@ -1624,19 +1563,11 @@
 
         dFile.url = tryToGetBigImageUrl(url);
         dFile.name = getFirstProperty(file, ['fileName', 'name', 'download-name', 'alt', 'title']) || nameFile(file.url) || 'Untitled';
-
-
-        dFile.fileExtension = getFileExtension(dFile.name);
-        if(!dFile.fileExtension){
-            dFile.fileExtension = getFileExtension(url);
-            dFile.name += dFile.fileExtension;
-        }
-
-        dFile.name = cleanFileName(dFile.name);
+        dFile.fileExtension = getFileExtension(dFile.name) || getFileExtension(url);
+        dFile.name = cleanFileName(dFile.name) + dFile.fileExtension;
 
         return dFile;
     }
-
 
     function setupProgressBar() {
         const container = document.createElement('div');
